@@ -1,0 +1,85 @@
+---
+title: "01-repro-annot"
+author: "Steven Roberts"
+date: "`r format(Sys.time(), '%d %B, %Y')`"  
+analyses: 
+  github_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    html_preview: true
+  html_document:
+    theme: readable
+    highlight: zenburn
+    toc: true
+    toc_float: true
+    number_sections: true
+    code_folding: show
+    code_download: true
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(tidyverse)
+library(kableExtra)
+library(DT)
+library(Biostrings)
+library(tm)
+library(pheatmap)
+library(DESeq2)
+knitr::opts_chunk$set(
+  echo = TRUE,         # Display code chunks
+  eval = FALSE,         # Evaluate code chunks
+  warning = FALSE,     # Hide warnings
+  message = FALSE,     # Hide messages
+  fig.width = 6,       # Set plot width in inches
+  fig.height = 4,      # Set plot height in inches
+  fig.align = "center", # Align plots to the center
+  comment = ""         # Prevents appending '##' to beginning of lines in code analyses
+)
+```
+Lets take proteins and characterize all those involved in reproduction
+
+```{r, engine='bash', eval=TRUE}
+head ../data/PO2457_Ostrea_lurida.protein.fasta
+
+```
+
+```{r, engine='bash', eval=TRUE}
+grep ">" -c  ../data/PO2457_Ostrea_lurida.protein.fasta
+
+```
+
+# Make BlastDB
+ 
+```{r, engine='bash'}
+cd ../data
+curl -O https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/uniprot_sprot.fasta.gz
+mv uniprot_sprot.fasta.gz uniprot_sprot_r2024_03.fasta.gz
+gunzip -k uniprot_sprot_r2024_03.fasta.gz
+```
+
+```{r, engine='bash'}
+mkdir ../blastdb
+/home/shared/ncbi-blast-2.11.0+/bin/makeblastdb \
+-in ../data/uniprot_sprot_r2024_03.fasta \
+-dbtype prot \
+-out ../blastdb/uniprot_sprot_r2024_03
+```
+
+# Blast
+
+```{r, engine='bash'}
+/home/shared/ncbi-blast-2.11.0+/bin/blastp \
+-query ../data/PO2457_Ostrea_lurida.protein.fasta \
+-db ../blastdb/uniprot_sprot_r2024_03 \
+-out ../output/01-repro-annot/Olur-uniprot_blastp.tab \
+-evalue 1E-20 \
+-num_threads 30 \
+-max_target_seqs 1 \
+-max_hsps 1 \
+-outfmt 6
+```
