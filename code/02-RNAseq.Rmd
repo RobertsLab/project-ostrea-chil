@@ -1,0 +1,7 @@
+---
+title: "02-RNAseq"
+output: html_document
+date: "2025-08-01"
+---
+
+Getting RNAseq from nanoore 
