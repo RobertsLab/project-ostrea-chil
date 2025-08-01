@@ -5,3 +5,144 @@ date: "2025-08-01"
 ---
 
 Getting RNAseq from nanoore 
+
+```{bash}
+find /home/shared/16TB_HDD_01/valentina/data/Pumalin/barcode02 -name "*.fastq.gz" -print0 | xargs -0 zcat | gzip > ../output/02-RNAseq/Pum_barcode02_combined.fastq.gz
+```
+
+```{bash}
+find /home/shared/16TB_HDD_01/valentina/data/Pumalin/barcode12_1 -name "*.fastq.gz" -print0 | xargs -0 zcat | gzip > ../output/02-RNAseq/Pum_barcode12_1_combined.fastq.gz
+```
+
+
+```{bash}
+find /home/shared/16TB_HDD_01/valentina/data/Pumalin/barcode13 -name "*.fastq.gz" -print0 | xargs -0 zcat | gzip > ../output/02-RNAseq/Pum_barcode13_combined.fastq.gz
+```
+
+
+
+```{bash}
+find /home/shared/16TB_HDD_01/valentina/data/Pumalin/barcode13_1 -name "*.fastq.gz" -print0 | xargs -0 zcat | gzip > ../output/02-RNAseq/Pum_barcode13_1_combined.fastq.gz
+```
+
+
+```{bash}
+minimap2 -ax splice -k14 --MD -t 42  \
+../data/Och_HapA_assembly.fa \
+../output/02-RNAseq/Pum_barcode02_combined.fastq.gz | \
+samtools sort -@ 42 -o ../output/02-RNAseq/Pum_barcode02.sorted.bam
+
+samtools index ../output/02-RNAseq/Pum_barcode02.sorted.bam
+
+```
+
+```{bash}
+minimap2 -ax splice -k14 --MD -t 42  \
+../data/Och_HapA_assembly.fa \
+../output/02-RNAseq/Pum_barcode12_1_combined.fastq.gz | \
+samtools sort -@ 42 -o ../output/02-RNAseq/Pum_barcode12_1.sorted.bam
+
+samtools index ../output/02-RNAseq/Pum_barcode12_1.sorted.bam
+
+```
+
+
+
+```{bash}
+minimap2 -ax splice -k14 --MD -t 42  \
+../data/Och_HapA_assembly.fa \
+../output/02-RNAseq/Pum_barcode13_combined.fastq.gz | \
+samtools sort -@ 42 -o ../output/02-RNAseq/Pum_barcode13.sorted.bam
+
+samtools index ../output/02-RNAseq/Pum_barcode13.sorted.bam
+
+```
+
+
+
+```{bash}
+minimap2 -ax splice -k14 --MD -t 42  \
+../data/Och_HapA_assembly.fa \
+../output/02-RNAseq/Pum_barcode13_1_combined.fastq.gz | \
+samtools sort -@ 42 -o ../output/02-RNAseq/Pum_barcode13_1.sorted.bam
+
+samtools index ../output/02-RNAseq/Pum_barcode13_1.sorted.bam
+
+```
+
+
+
+# BAMBU
+
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("bambu")
+```
+
+```{bash}
+gffread ../data/GN.gene.gff3 -T -o ../data/GN.gene.gtf
+```
+
+
+
+
+```{r}
+#library(bambu)
+
+
+# Run bambu
+tx <- bambu(
+  reads = c("../output/02-RNAseq/Pum_barcode02.sorted.bam",
+            "../output/02-RNAseq/Pum_barcode12_1.sorted.bam",
+            "../output/02-RNAseq/Pum_barcode13.sorted.bam",
+            "../output/02-RNAseq/Pum_barcode13_1.sorted.bam"),
+  annotations = "../data/GN.gene.gtf",
+  genome = "../data/Och_HapA_assembly.fa",
+  ncore = 42
+)
+
+# Write output
+writeBambuOutput(
+  tx,
+  path = "../output/02-RNAseq/bambu_output",
+  writeGTF = TRUE,
+  writeFA = TRUE,
+  writeCounts = TRUE,
+  formatCounts = "csv"
+)
+```
+```{r}
+tx_counts <- assay(tx)
+```
+```{r}
+write.csv(tx_counts, file = "../output/02-RNAseq/Pum_transcript_counts.csv")
+```
+
+
+
+```{r}
+writeBambuOutput(
+  tx,
+  path = "../output/02-RNAseq/bambu_output",
+  writeGTF = TRUE,
+  writeFA = TRUE,
+  writeCounts = TRUE,
+  formatCounts = "csv")
+```
+
+
+
+
+```{r}
+
+BiocManager::install("tximport")
+library(tximport)
+
+# Convert transcript counts to a list (mimicking tximport input)
+txi <- tximport(list(dummy=tx_counts), type = "none", tx2gene = as.data.frame(tx2gene))
+gene_counts <- txi$counts
+```
+
