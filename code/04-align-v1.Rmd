@@ -1,0 +1,56 @@
+---
+title: "04-Align-v1"
+output: html_document
+date: "2025-08-02"
+---
+
+```{bash}
+eval "$(/opt/anaconda/anaconda3/bin/conda shell.bash hook)"
+conda activate
+
+# Set number of threads
+threads=42
+
+# Set paths
+ref_genome="../data/merged_out.fasta.TBtools.fa"
+input_dir="../output/02-RNAseq"
+output_dir="../output/04-align-v1"
+
+# Loop over each FASTQ file
+for fq in ${input_dir}/*.fastq.gz; do
+  # Extract sample name (e.g., Pum_barcode02 from Pum_barcode02_combined.fastq.gz)
+  sample=$(basename "$fq" .fastq.gz)
+
+  echo "Processing $sample..."
+
+  # Run minimap2 and samtools sort
+  minimap2 -ax splice -k14 --MD -t $threads "$ref_genome" "$fq" | \
+    samtools sort -@ $threads -o "${output_dir}/${sample}.sorted.bam"
+
+  # Index the sorted BAM
+  samtools index "${output_dir}/${sample}.sorted.bam"
+done
+```
+
+
+# Bigwig
+
+
+```
+find . -name "*.bam" | parallel 'bedtools genomecov -ibam {} -bg > {.}.bedGraph'
+```
+
+# make bigwig
+```{bash}
+
+cut -f1,2 ../data/merged_out.fasta.TBtools.fa.fai > ../output/04-align-v1/genome.chrom.sizes
+```
+
+```{bash}
+for bed in *.bedGraph; do
+  base=$(basename "$bed" _combined.sorted.bedGraph)
+  bedGraphToBigWig "$bed" genome.chrom.sizes "${base}.bw"
+done
+```
+
+

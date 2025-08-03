@@ -27,6 +27,265 @@ find /home/shared/16TB_HDD_01/valentina/data/Pumalin/barcode13_1 -name "*.fastq.
 
 
 ```{bash}
+find /home/shared/16TB_HDD_01/valentina/data/Quilhua/barcode01 -name "*.fastq.gz" -print0 | xargs -0 zcat | gzip > ../output/02-RNAseq/Qui_barcode01_combined.fastq.gz
+
+find /home/shared/16TB_HDD_01/valentina/data/Quilhua/barcode01_1 -name "*.fastq.gz" -print0 | xargs -0 zcat | gzip > ../output/02-RNAseq/Qui_barcode01_1_combined.fastq.gz
+
+find /home/shared/16TB_HDD_01/valentina/data/Quilhua/barcode02_1 -name "*.fastq.gz" -print0 | xargs -0 zcat | gzip > ../output/02-RNAseq/Qui_barcode02_1_combined.fastq.gz
+
+find /home/shared/16TB_HDD_01/valentina/data/Quilhua/barcode12 -name "*.fastq.gz" -print0 | xargs -0 zcat | gzip > ../output/02-RNAseq/Qui_barcode12_combined.fastq.gz
+```
+
+
+
+
+```{bash}
+find /home/shared/16TB_HDD_01/valentina/data/Rio_Pudeto/barcode03 -name "*.fastq.gz" -print0 | xargs -0 zcat | gzip > ../output/02-RNAseq/Rio_barcode03_combined.fastq.gz
+
+find /home/shared/16TB_HDD_01/valentina/data/Rio_Pudeto/barcode03_1 -name "*.fastq.gz" -print0 | xargs -0 zcat | gzip > ../output/02-RNAseq/Rio_barcode03_1_combined.fastq.gz
+
+find /home/shared/16TB_HDD_01/valentina/data/Rio_Pudeto/barcode14 -name "*.fastq.gz" -print0 | xargs -0 zcat | gzip > ../output/02-RNAseq/Rio_barcode14_combined.fastq.gz
+
+find /home/shared/16TB_HDD_01/valentina/data/Rio_Pudeto/barcode14_1 -name "*.fastq.gz" -print0 | xargs -0 zcat | gzip > ../output/02-RNAseq/Rio_barcode14_1_combined.fastq.gz
+```
+
+
+
+
+#minimap
+
+```{bash}
+eval "$(/opt/anaconda/anaconda3/bin/conda shell.bash hook)"
+conda activate
+
+# Set number of threads
+threads=42
+
+# Set paths
+ref_genome="../data/Och_HapA_assembly.fa"
+input_dir="../output/02-RNAseq"
+output_dir="../output/02-RNAseq"
+
+# Loop over each FASTQ file
+for fq in ${input_dir}/*.fastq.gz; do
+  # Extract sample name (e.g., Pum_barcode02 from Pum_barcode02_combined.fastq.gz)
+  sample=$(basename "$fq" .fastq.gz)
+
+  echo "Processing $sample..."
+
+  # Run minimap2 and samtools sort
+  minimap2 -ax splice -k14 --MD -t $threads "$ref_genome" "$fq" | \
+    samtools sort -@ $threads -o "${output_dir}/${sample}.sorted.bam"
+
+  # Index the sorted BAM
+  samtools index "${output_dir}/${sample}.sorted.bam"
+done
+```
+
+
+
+# STRINGTIE
+
+```{bash}
+ls ../output/02-RNAseq/*combined.sorted.bam | wc -l
+```
+
+
+```{bash}
+mkdir -p ../output/02-RNAseq/stringtie_out
+
+for bam in ../output/02-RNAseq/*combined.sorted.bam; do
+    sample=$(basename "$bam" _combined.sorted.bam)
+    /home/shared/stringtie-2.2.1.Linux_x86_64/stringtie "$bam" \
+        -L \
+        -o ../output/02-RNAseq/stringtie_out/${sample}.gtf \
+        -p 32 \
+        -v
+done
+```
+
+```{bash}
+ls ../output/02-RNAseq/stringtie_out/*.gtf > ../output/02-RNAseq/stringtie_out/mergelist.txt
+
+/home/shared/stringtie-2.2.1.Linux_x86_64/stringtie --merge \
+    -L \
+    -G ../data/GN.gene.gtf \
+    -o ../output/02-RNAseq/stringtie_out/merged.gtf \
+    ../output/02-RNAseq/stringtie_out/mergelist.txt
+```
+
+
+```{bash}
+head ../output/02-RNAseq/stringtie_out/merged.gtf
+```
+
+
+```{bash}
+mkdir -p ../output/02-RNAseq/stringtie_quant
+
+for bam in ../output/02-RNAseq/*combined.sorted.bam; do
+    sample=$(basename "$bam" _combined.sorted.bam)
+    /home/shared/stringtie-2.2.1.Linux_x86_64/stringtie "$bam" \
+        -L \
+        -e \
+        -B \
+        -G ../output/02-RNAseq/stringtie_out/merged.gtf \
+        -o ../output/02-RNAseq/stringtie_quant/${sample}.gtf
+done
+```
+
+```{bash}
+python /home/shared/stringtie-2.2.1.Linux_x86_64/prepDE.py \
+-i ../output/02-RNAseq/stringtie_quant/samplelist.txt \
+-g ../output/02-RNAseq/stringtie_quant/gene_count_matrix.csv \
+-t ../output/02-RNAseq/stringtie_quant/transcript_count_matrix.csv
+```
+
+
+```{r}
+library(tidyverse)
+
+# Read the data
+df <- read_csv("../output/02-RNAseq/stringtie_quant/gene_count_matrix.csv")
+
+# Pivot longer and extract species prefix
+df_long <- df %>%
+  pivot_longer(
+    cols = -gene_id,
+    names_to = "sample",
+    values_to = "count"
+  ) %>%
+  mutate(species = str_sub(sample, 1, 3))  # Get first 3 letters as species
+
+# Summarize average count per gene per species
+df_summary <- df_long %>%
+  group_by(gene_id, species) %>%
+  summarize(mean_count = mean(count), .groups = "drop")
+
+# Pivot wider so each species is a column
+df_wide <- df_summary %>%
+  pivot_wider(names_from = species, values_from = mean_count)
+
+# Compute variance across species per gene
+df_var <- df_wide %>%
+  rowwise() %>%
+  mutate(variance = var(c_across(where(is.numeric)), na.rm = TRUE)) %>%
+  ungroup()
+
+# Get top genes with highest variance
+top_genes <- df_var %>%
+  arrange(desc(variance)) %>%
+  slice_head(n = 20)  # or any number of top genes
+
+# View results
+top_genes
+```
+
+```{r}
+library(tidyverse)
+library(pheatmap)
+
+# Read the data
+df <- read_csv("../output/02-RNAseq/stringtie_quant/gene_count_matrix.csv")
+
+# Pivot longer and extract species prefix
+df_long <- df %>%
+  pivot_longer(
+    cols = -gene_id,
+    names_to = "sample",
+    values_to = "count"
+  ) %>%
+  mutate(species = str_sub(sample, 1, 3))  # Get first 3 letters as species
+
+# Summarize average count per gene per species
+df_summary <- df_long %>%
+  group_by(gene_id, species) %>%
+  summarize(mean_count = mean(count), .groups = "drop")
+
+# Pivot wider so each species is a column
+df_wide <- df_summary %>%
+  pivot_wider(names_from = species, values_from = mean_count)
+
+# Compute variance across species per gene
+df_var <- df_wide %>%
+  rowwise() %>%
+  mutate(variance = var(c_across(where(is.numeric)), na.rm = TRUE)) %>%
+  ungroup()
+
+# Get top 20 genes with highest variance
+top_genes <- df_var %>%
+  arrange(desc(variance)) %>%
+  slice_head(n = 20)
+
+# Set row names to gene IDs and remove 'variance' column
+top_matrix <- top_genes %>%
+  column_to_rownames("gene_id") %>%
+  select(-variance) %>%
+  as.matrix()
+
+# Plot heatmap
+pheatmap(
+  mat = top_matrix,
+  scale = "row", # scale across genes
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  fontsize_row = 8,
+  main = "Top 20 Most Variable Genes Across Species"
+)
+```
+
+
+# get fasta
+
+```{bash}
+cut -f3 ../output/02-RNAseq/stringtie_out/merged.gtf | grep -v "^#" | sort | uniq 
+```
+
+
+
+```{bash}
+grep -v "^#" ../output/02-RNAseq/stringtie_out/merged.gtf | awk '$3 == "transcript"' | \
+awk 'BEGIN{OFS="\t"} {print $1, $4-1, $5, $10, ".", $7}' | sed -E 's/"//g; s/;//g' > ../output/02-RNAseq/stringtie_out/merged_transcripts.bed
+```
+
+
+```{bash}
+head ../output/02-RNAseq/stringtie_out/merged_transcripts.bed
+```
+```{bash}
+bedtools getfasta -fi ../data/Och_HapA_assembly.fa \
+-bed ../output/02-RNAseq/stringtie_out/merged_transcripts.bed \
+-s -name -fo ../output/02-RNAseq/stringtie_out/transcripts.fa
+```
+```{bash}
+head ../output/02-RNAseq/stringtie_out/transcripts.fa
+```
+```{r, engine='bash'}
+mkdir ../blastdb
+/home/shared/ncbi-blast-2.11.0+/bin/makeblastdb \
+-in ../data/uniprot_sprot_r2024_03.fasta \
+-dbtype prot \
+-out ../blastdb/uniprot_sprot_r2024_03
+```
+
+# Blast
+
+```{r, engine='bash'}
+/home/shared/ncbi-blast-2.11.0+/bin/blastx \
+-query ../output/02-RNAseq/stringtie_out/transcripts.fa \
+-db ../blastdb/uniprot_sprot_r2024_03 \
+-out ../output/02-RNAseq/stringtie_out/transcript-uniprot_blastx.tab \
+-evalue 1E-20 \
+-num_threads 42 \
+-max_target_seqs 1 \
+-max_hsps 1 \
+-outfmt 6
+```
+
+
+
+
+```{bash}
 minimap2 -ax splice -k14 --MD -t 42  \
 ../data/Och_HapA_assembly.fa \
 ../output/02-RNAseq/Pum_barcode02_combined.fastq.gz | \

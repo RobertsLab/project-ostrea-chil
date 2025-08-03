@@ -1,0 +1,29 @@
+---
+title: "05-synteny"
+output: html_document
+date: "2025-08-03"
+---
+
+
+```{bash}
+eval "$(/opt/anaconda/anaconda3/bin/conda shell.bash hook)"
+conda activate
+
+minimap2 -x asm5 -t 42 ../data/merged_out.fasta.TBtools.fa ../data/Och_HapA_assembly.fa > ../output/05-synteny/TB_vs_HapA.paf
+```
+```{bash}
+eval "$(/opt/anaconda/anaconda3/bin/conda shell.bash hook)"
+conda activate
+
+minimap2 -x asm5 -t 42 ../data/Och_HapA_assembly.fa ../data/Och_HapB_assembly.fa > ../output/05-synteny/HapA_vs_HapB.paf
+```
+
+
+```{bash}
+eval "$(/opt/anaconda/anaconda3/bin/conda shell.bash hook)"
+conda activate
+
+minimap2 -x asm5 -t 12 ../data/merged_out.fasta.TBtools.fa ../data/Och_HapB_assembly.fa > ../output/05-synteny/TB_vs_HapB.paf
+```
+
+

@@ -1,0 +1,58 @@
+---
+title: "03-annotation"
+output: html_document
+date: "2025-08-02"
+---
+
+Blast table 
+
+```{bash}
+pwd
+head -2 ../output/02-RNAseq/stringtie_out/transcript-uniprot_blastx.tab
+```
+```{bash}
+tr '|' '\t' < ../output/02-RNAseq/stringtie_out/transcript-uniprot_blastx.tab \
+> ../output/02-RNAseq/stringtie_out/transcript-uniprot_blastx_sep.tab
+
+
+```
+
+```{bash}
+head -2 ../data/SPannot-GO.tsv
+```
+
+```{r}
+library(tidyverse)
+library(DT)
+```
+
+
+```{r read-data}
+bltabl <- read.csv("../output/02-RNAseq/stringtie_out/transcript-uniprot_blastx_sep.tab", sep = '\t', header = FALSE)
+
+spgo <- read.csv("../data/SPannot-GO.tsv", sep = '\t', header = TRUE)
+```
+
+
+
+
+```{r}
+datatable(head(bltabl), options = list(scrollX = TRUE, scrollY = "400px", scrollCollapse = TRUE, paging = FALSE))
+```
+
+```{r spgo-table}
+datatable(head(spgo), options = list(scrollX = TRUE, scrollY = "400px", scrollCollapse = TRUE, paging = FALSE))
+```
+
+```{r see}
+datatable(
+  left_join(bltabl, spgo,  by = c("V3" = "Entry")) %>%
+  select(V1, V3, V13, Protein.names, Organism, Gene.Ontology..biological.process., Gene.Ontology.IDs))
+)
+```
+
+```{r join}
+annot_tab <-
+  left_join(bltabl, spgo,  by = c("V3" = "Entry")) %>%
+  select(V1, V3, V13, Protein.names, Organism, Gene.Ontology..biological.process., Gene.Ontology.IDs)
+```
