@@ -37,7 +37,7 @@ done
 
 
 ```
-find . -name "*.bam" | parallel 'bedtools genomecov -ibam {} -bg > {.}.bedGraph'
+find . -name "*.bam" | parallel 'bedtools genomecov -split -bg -ibam {} > {.}.sp.bedGraph'
 ```
 
 # make bigwig
@@ -46,11 +46,153 @@ find . -name "*.bam" | parallel 'bedtools genomecov -ibam {} -bg > {.}.bedGraph'
 cut -f1,2 ../data/merged_out.fasta.TBtools.fa.fai > ../output/04-align-v1/genome.chrom.sizes
 ```
 
+#!/bin/bash
+
+# Loop through all bedGraph files in the current directory
+for file in *.bedGraph; do
+  echo "Fixing sorting for $file"
+  LC_COLLATE=C sort -k1,1 -k2,2n "$file" > "${file}.sorted"
+  mv "${file}.sorted" "$file"
+done
+
+
+
 ```{bash}
 for bed in *.bedGraph; do
-  base=$(basename "$bed" _combined.sorted.bedGraph)
+  base=$(basename "$bed" _combined.sorted.sp.bedGraph)
   bedGraphToBigWig "$bed" genome.chrom.sizes "${base}.bw"
 done
 ```
 
 
+#stringtie
+
+
+```{bash}
+mkdir -p ../output/04-align-v1/stringtie_out
+
+for bam in ../output/04-align-v1/*combined.sorted.bam; do
+    sample=$(basename "$bam" _combined.sorted.bam)
+    /home/shared/stringtie-2.2.1.Linux_x86_64/stringtie "$bam" \
+        -L \
+        -o ../output/04-align-v1/stringtie_out/${sample}.gtf \
+        -p 32 \
+        -v
+done
+```
+```{bash}
+ls ../output/04-align-v1/stringtie_out/*.gtf > ../output/04-align-v1/stringtie_out/mergelist.txt
+
+/home/shared/stringtie-2.2.1.Linux_x86_64/stringtie --merge \
+    -L \
+    -G ../data/GN.gene.gtf \
+    -o ../output/04-align-v1/stringtie_out/merged.gtf \
+    ../output/04-align-v1/stringtie_out/mergelist.txt
+```
+
+
+```{bash}
+mkdir -p ../output/04-align-v1/stringtie_quant
+
+for bam in ../output/04-align-v1/*combined.sorted.bam; do
+    sample=$(basename "$bam" _combined.sorted.bam)
+    /home/shared/stringtie-2.2.1.Linux_x86_64/stringtie "$bam" \
+        -L \
+        -e \
+        -B \
+        -G ../output/04-align-v1/stringtie_out/merged.gtf \
+        -o ../output/04-align-v1/stringtie_quant/${sample}.gtf
+done
+```
+
+
+
+
+
+
+
+
+```{bash}
+python /home/shared/stringtie-2.2.1.Linux_x86_64/prepDE.py \
+-i ../output/04-align-v1/stringtie_quant/samplelist.txt \
+-g ../output/04-align-v1/stringtie_quant/gene_count_matrix.csv \
+-t ../output/04-align-v1/stringtie_quant/transcript_count_matrix.csv
+```
+
+
+
+
+# BLAST
+
+
+
+
+# get fasta
+
+```{bash}
+cut -f3 ../output/04-align-v1/stringtie_out/merged.gtf | grep -v "^#" | sort | uniq 
+```
+
+
+
+```{bash}
+grep -v "^#" ../output/04-align-v1/stringtie_out/merged.gtf | awk '$3 == "transcript"' | \
+awk 'BEGIN{OFS="\t"} {print $1, $4-1, $5, $10, ".", $7}' | sed -E 's/"//g; s/;//g' > ../output/04-align-v1/stringtie_out/merged_transcripts.bed
+```
+
+
+```{bash}
+head ../output/04-align-v1/stringtie_out/merged_transcripts.bed
+```
+```{bash}
+bedtools getfasta -fi ../data/merged_out.fasta.TBtools.fa \
+-bed ../output/04-align-v1/stringtie_out/merged_transcripts.bed \
+-s -name -fo ../output/04-align-v1/stringtie_out/transcripts.fa
+```
+
+
+
+
+
+
+```{bash}
+grep -c ">" ../output/04-align-v1/stringtie_out/transcripts.fa
+```
+
+
+```{r, engine='bash'}
+/home/shared/diamond-2.1.8 makedb \
+--in ../data/uniprot_sprot_r2024_03.fasta \
+--threads 30 \
+--db ../blastdb/dia-uniprot_sprot_r2024_03
+```
+
+# Blast
+
+```{bash}
+/home/shared/diamond-2.1.8 help
+```
+
+```{r, engine='bash'}
+/home/shared/diamond-2.1.8 blastx \
+--query ../output/04-align-v1/stringtie_out/transcripts.fa \
+--db ../blastdb/dia-uniprot_sprot_r2024_03 \
+--out ../output/04-align-v1/stringtie_out/transcript-uniprot_dia-blastx.tab \
+--threads 42 \
+--max-target-seqs 1 \
+--max-hsps 1 \
+--outfmt 6
+```
+
+
+```{r, engine='bash'}
+/home/shared/ncbi-blast-2.11.0+/bin/blastx \
+-query ../output/04-align-v1/stringtie_out/transcripts.fa \
+-db ../blastdb/uniprot_sprot_r2024_03 \
+-out ../output/04-align-v1/stringtie_out/transcript-uniprot_blastx.tab \
+-evalue 1E-20 \
+-num_threads 42 \
+-max_target_seqs 1 \
+-max_hsps 1 \
+-outfmt 6
+```
