@@ -1,0 +1,37 @@
+---
+title: "06-Annot-novel"
+output: html_document
+date: "2025-08-05"
+---
+
+Annotating novel transcripts
+
+
+```{bash}
+cd /home/shared/16TB_HDD_01/blast_dbs/nt
+/home/shared/ncbi-blast-2.15.0+/bin/update_blastdb.pl --decompress nt
+```
+
+Sam has nt database at 
+
+/home/shared/8TB_HDD_01/sam/data/blastdbs/20240603-nt
+
+```{bash}
+/home/shared/ncbi-blast-2.15.0+/bin/blastn \
+  -query ../output/04-align-v1/stringtie_out/transcripts.fa \
+  -db /home/shared/8TB_HDD_01/sam/data/blastdbs/20240603-nt/nt \
+  -out ../output/06-Annot-novel/trn_blastn_nt.tab \
+  -outfmt 6 \
+  -max_target_seqs 1 \
+  -max_hsps 1 \
+  -evalue 1e-5 \
+  -num_threads 42 \
+  -task megablast
+```
+
+```{bash}
+head ../output/06-Annot-novel/trn_blastn_nt.tab
+```
+
+
+

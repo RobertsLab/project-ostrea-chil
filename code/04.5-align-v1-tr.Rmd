@@ -1,0 +1,279 @@
+---
+title: "04-Align-v1"
+output: html_document
+date: "2025-08-02"
+---
+
+```{bash}
+eval "$(/opt/anaconda/anaconda3/bin/conda shell.bash hook)"
+conda activate
+
+# Set number of threads
+threads=42
+
+# Set paths
+ref_genome="../data/merged_out.fasta.TBtools.fa"
+input_dir="../output/02-RNAseq"
+output_dir="../output/04-align-v1"
+
+# Loop over each FASTQ file
+for fq in ${input_dir}/*.fastq.gz; do
+  # Extract sample name (e.g., Pum_barcode02 from Pum_barcode02_combined.fastq.gz)
+  sample=$(basename "$fq" .fastq.gz)
+
+  echo "Processing $sample..."
+
+  # Run minimap2 and samtools sort
+  minimap2 -ax splice -k14 --MD -t $threads "$ref_genome" "$fq" | \
+    samtools sort -@ $threads -o "${output_dir}/${sample}.sorted.bam"
+
+  # Index the sorted BAM
+  samtools index "${output_dir}/${sample}.sorted.bam"
+done
+```
+
+
+
+
+```{bash}
+python /home/shared/stringtie-2.2.1.Linux_x86_64/prepDE.py \
+-i ../output/04-align-v1/stringtie_quant/samplelist.txt \
+-g ../output/04-align-v1/stringtie_quant/gene_count_matrix.csv \
+-t ../output/04-align-v1/stringtie_quant/transcript_count_matrix.csv
+```
+
+
+```{bash}
+wc -l ../output/04-align-v1/stringtie_quant/transcript_count_matrix.csv
+wc -l ../output/04-align-v1/stringtie_quant/gene_count_matrix.csv
+```
+
+
+
+
+
+```{r}
+library(DESeq2)
+
+# Load raw counts
+gene_counts <- read.csv("../output/04-align-v1/stringtie_quant/transcript_count_matrix.csv", row.names = 1)
+
+# Make sample metadata
+sample_info <- data.frame(
+  row.names = colnames(gene_counts),
+  condition = c("A", "A", "A","A", "B", "B", "B","B","C","C", "C", "C")  # example
+)
+
+# DESeq2 object and normalization
+dds <- DESeqDataSetFromMatrix(countData = gene_counts, colData = sample_info, design = ~ condition)
+dds <- DESeq(dds)
+norm_counts <- counts(dds, normalized = TRUE)
+```
+
+
+
+
+```{r}
+library(limma)
+library(tidyverse)
+
+# Prepare expression matrix (genes x samples)
+expr <- as.matrix(norm_counts)
+
+# Create design matrix
+group <- factor(case_when(
+  str_detect(colnames(expr), "^Pum") ~ "Pum",
+  str_detect(colnames(expr), "^Qui") ~ "Qui",
+  str_detect(colnames(expr), "^Rio") ~ "Rio"
+))
+
+design <- model.matrix(~ 0 + group)
+colnames(design) <- levels(group)
+
+# Fit linear model
+fit <- lmFit(expr, design)
+
+# Create contrast for all pairwise comparisons
+contrast_matrix <- makeContrasts(
+  Pum_vs_Qui = Pum - Qui,
+  Pum_vs_Rio = Pum - Rio,
+  Qui_vs_Rio = Qui - Rio,
+  levels = design
+)
+
+fit2 <- contrasts.fit(fit, contrast_matrix)
+fit2 <- eBayes(fit2)
+
+```
+
+
+all contrasts
+
+```{r}
+# Get all contrast names
+contrast_names <- colnames(fit2$contrasts)
+
+# Extract all DEGs per contrast
+deg_list <- lapply(contrast_names, function(contrast) {
+  tt <- topTable(fit2, coef = contrast, number = Inf, sort.by = "P")  # all genes
+  tt$gene_id <- rownames(tt)
+  tt$contrast <- contrast
+  tt
+})
+
+# Combine into one long data frame
+all_degs <- bind_rows(deg_list)
+```
+
+
+```{r}
+# Filter for significant DEGs across all contrasts
+sig_degs <- all_degs %>%
+  filter(adj.P.Val < 0.05 & abs(logFC) > 1)
+```
+
+
+
+```{r}
+sig_degs %>%
+  count(contrast)
+```
+
+
+```{r}
+library(tidyverse)
+
+# Step 1: Convert matrix to data frame and calculate variance
+gene_variances <- as.data.frame(norm_counts) %>%
+  rownames_to_column("gene") %>%
+  mutate(variance = apply(select(., -gene), 1, var))
+
+# Step 2: Select top 500 most variable genes
+top500 <- gene_variances %>%
+  arrange(desc(variance)) %>%
+  slice_head(n = 500) %>%
+  select(-variance) %>%
+  column_to_rownames("gene")
+
+# Step 3: Transpose for PCA (samples as rows)
+t_counts <- t(top500)
+
+# Step 4: Run PCA
+pca_res <- prcomp(t_counts, scale. = TRUE)
+
+# Step 5: Calculate percent variance explained
+percentVar <- pca_res$sdev^2 / sum(pca_res$sdev^2)
+
+# Step 6: Format PCA output for plotting
+pca_df <- as.data.frame(pca_res$x) %>%
+  rownames_to_column("Sample")
+
+
+# Add group info based on sample name prefix
+pca_df <- pca_df %>%
+  mutate(Group = case_when(
+    str_starts(Sample, "Pum") ~ "Pum",
+    str_starts(Sample, "Qui") ~ "Qui",
+    str_starts(Sample, "Rio") ~ "Rio",
+    TRUE ~ "Other"
+  ))
+
+# Step 7: Plot PCA
+ggplot(pca_df, aes(x = PC1, y = PC2, color = Group)) +
+  geom_point(size = 4) +
+  xlab(paste0("PC1: ", round(percentVar[1] * 100, 1), "% variance")) +
+  ylab(paste0("PC2: ", round(percentVar[2] * 100, 1), "% variance")) +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1")  # Optional: nice colors
+```
+
+```{r}
+library(tidyverse)
+
+# Convert normalized matrix to data frame
+df <- as.data.frame(norm_counts)
+
+# Extract sample names and group labels from column names
+sample_groups <- colnames(df) %>%
+  as.data.frame() %>%
+  rename(Sample = 1) %>%
+  mutate(Group = str_extract(Sample, "^[^_]+"))  # adjust if needed
+
+# Step 1: Transpose to long format: gene, sample, value
+df_long <- df %>%
+  rownames_to_column("Gene") %>%
+  pivot_longer(-Gene, names_to = "Sample", values_to = "Expression") %>%
+  left_join(sample_groups, by = "Sample")
+
+# Step 2: Run one-way ANOVA per gene to test for group differences
+anova_results <- df_long %>%
+  group_by(Gene) %>%
+  summarise(p_value = tryCatch(
+    summary(aov(Expression ~ Group))[[1]][["Pr(>F)"]][1],
+    error = function(e) NA
+  )) %>%
+  drop_na() %>%
+  arrange(p_value)
+
+# Step 3: Get top 500 genes with smallest p-values (most differential)
+top500_genes <- anova_results %>%
+  slice_head(n = 500) %>%
+  pull(Gene)
+
+# Step 4: Subset original matrix
+top500_matrix <- df[top500_genes, ]
+
+# Step 5: Transpose for PCA
+t_counts <- t(top500_matrix)
+
+# Step 6: Run PCA
+pca_res <- prcomp(t_counts, scale. = TRUE)
+
+# Step 7: Calculate % variance
+percentVar <- pca_res$sdev^2 / sum(pca_res$sdev^2)
+
+# Step 8: Format PCA output
+pca_df <- as.data.frame(pca_res$x) %>%
+  rownames_to_column("Sample") %>%
+  mutate(Group = str_extract(Sample, "^[^_]+"))
+
+# Step 9: Plot
+ggplot(pca_df, aes(x = PC1, y = PC2, color = Group)) +
+  geom_point(size = 4) +
+  xlab(paste0("PC1: ", round(percentVar[1] * 100, 1), "% variance")) +
+  ylab(paste0("PC2: ", round(percentVar[2] * 100, 1), "% variance")) +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1")
+```
+```{r}
+library(tidyverse)
+
+# Step 1: Ensure norm_counts is a data frame
+df <- as.data.frame(norm_counts)
+
+# Step 2: Transpose so samples are rows
+t_counts <- t(df)
+
+# Step 3: Remove genes with zero variance
+t_counts <- t_counts[, apply(t_counts, 2, var) != 0]
+
+# Step 4: Run PCA
+pca_res <- prcomp(t_counts, scale. = TRUE)
+
+# Step 5: Percent variance
+percentVar <- pca_res$sdev^2 / sum(pca_res$sdev^2)
+
+# Step 6: Format PCA output and group info
+pca_df <- as.data.frame(pca_res$x) %>%
+  rownames_to_column("Sample") %>%
+  mutate(Group = str_extract(Sample, "^[^_]+"))
+
+# Step 7: Plot
+ggplot(pca_df, aes(x = PC1, y = PC2, color = Group)) +
+  geom_point(size = 4) +
+  xlab(paste0("PC1: ", round(percentVar[1] * 100, 1), "% variance")) +
+  ylab(paste0("PC2: ", round(percentVar[2] * 100, 1), "% variance")) +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1")
+```
+

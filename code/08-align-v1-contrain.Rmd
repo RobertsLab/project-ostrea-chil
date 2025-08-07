@@ -1,98 +1,34 @@
 ---
-title: "04-Align-v1"
+title: "08-Align-v1"
 output: html_document
 date: "2025-08-02"
 ---
-
-```{bash}
-eval "$(/opt/anaconda/anaconda3/bin/conda shell.bash hook)"
-conda activate
-
-# Set number of threads
-threads=42
-
-# Set paths
-ref_genome="../data/merged_out.fasta.TBtools.fa"
-input_dir="../output/02-RNAseq"
-output_dir="../output/04-align-v1"
-
-# Loop over each FASTQ file
-for fq in ${input_dir}/*.fastq.gz; do
-  # Extract sample name (e.g., Pum_barcode02 from Pum_barcode02_combined.fastq.gz)
-  sample=$(basename "$fq" .fastq.gz)
-
-  echo "Processing $sample..."
-
-  # Run minimap2 and samtools sort
-  minimap2 -ax splice -k14 --MD -t $threads "$ref_genome" "$fq" | \
-    samtools sort -@ $threads -o "${output_dir}/${sample}.sorted.bam"
-
-  # Index the sorted BAM
-  samtools index "${output_dir}/${sample}.sorted.bam"
-done
-```
-
-
-# Bigwig
-
-
-```
-find . -name "*.bam" | parallel 'bedtools genomecov -split -bg -ibam {} > {.}.sp.bedGraph'
-```
-
-# make bigwig
-```{bash}
-
-cut -f1,2 ../data/merged_out.fasta.TBtools.fa.fai > ../output/04-align-v1/genome.chrom.sizes
-```
-
-#!/bin/bash
-
-# Loop through all bedGraph files in the current directory
-for file in *.bedGraph; do
-  echo "Fixing sorting for $file"
-  LC_COLLATE=C sort -k1,1 -k2,2n "$file" > "${file}.sorted"
-  mv "${file}.sorted" "$file"
-done
-
-
-
-```{bash}
-for bed in *.bedGraph; do
-  base=$(basename "$bed" _combined.sorted.sp.bedGraph)
-  bedGraphToBigWig "$bed" genome.chrom.sizes "${base}.bw"
-done
-```
 
 
 #stringtie
 
 
 ```{bash}
-mkdir -p ../output/04-align-v1/stringtie_out
+mkdir -p ../output/08-align-v1-constrain/stringtie_out
 
 for bam in ../output/04-align-v1/*combined.sorted.bam; do
     sample=$(basename "$bam" _combined.sorted.bam)
     /home/shared/stringtie-2.2.1.Linux_x86_64/stringtie "$bam" \
         -L \
-        -o ../output/04-align-v1/stringtie_out/${sample}.gtf \
+        -e \
+        -G ../data/GN.gene.gtf \
+        -o ../output/08-align-v1-constrain/stringtie_out/${sample}.gtf \
         -p 32 \
         -v
 done
 ```
-```{bash}
-ls ../output/04-align-v1/stringtie_out/*.gtf > ../output/04-align-v1/stringtie_out/mergelist.txt
 
-/home/shared/stringtie-2.2.1.Linux_x86_64/stringtie --merge \
-    -L \
-    -G ../data/GN.gene.gtf \
-    -o ../output/04-align-v1/stringtie_out/merged.gtf \
-    ../output/04-align-v1/stringtie_out/mergelist.txt
-```
+
+
 
 
 ```{bash}
-mkdir -p ../output/04-align-v1/stringtie_quant
+mkdir -p ../output/08-align-v1-constrain/stringtie_quant
 
 for bam in ../output/04-align-v1/*combined.sorted.bam; do
     sample=$(basename "$bam" _combined.sorted.bam)
@@ -100,13 +36,19 @@ for bam in ../output/04-align-v1/*combined.sorted.bam; do
         -L \
         -e \
         -B \
-        -G ../output/04-align-v1/stringtie_out/merged.gtf \
-        -o ../output/04-align-v1/stringtie_quant/${sample}.gtf
+        -G ../data/GN.gene.gtf \
+        -o ../output/08-align-v1-constrain/stringtie_quant/${sample}.gtf
 done
 ```
 
 
 
+```{bash}
+ls ../output/08-align-v1-constrain/stringtie_quant/*.gtf | while read filepath; do
+    sample=$(basename "$filepath" .gtf)
+    echo -e "${sample}\t${filepath}"
+done > ../output/08-align-v1-constrain/stringtie_quant/sample_lst.txt
+```
 
 
 
@@ -114,15 +56,18 @@ done
 
 ```{bash}
 python /home/shared/stringtie-2.2.1.Linux_x86_64/prepDE.py \
--i ../output/04-align-v1/stringtie_quant/samplelist.txt \
--g ../output/04-align-v1/stringtie_quant/gene_count_matrix.csv \
--t ../output/04-align-v1/stringtie_quant/transcript_count_matrix.csv
+-i ../output/08-align-v1-constrain/stringtie_quant/sample_lst.txt \
+-g ../output/08-align-v1-constrain/stringtie_quant/gene_count_matrix.csv \
+-t ../output/08-align-v1-constrain/stringtie_quant/transcript_count_matrix.csv
 ```
 
 
 ```{bash}
-wc -l ../output/04-align-v1/stringtie_quant/transcript_count_matrix.csv
-wc -l ../output/04-align-v1/stringtie_quant/gene_count_matrix.csv
+wc -l ../output/08-align-v1-constrain/stringtie_quant/transcript_count_matrix.csv
+wc -l ../output/08-align-v1-constrain/stringtie_quant/gene_count_matrix.csv
+```
+```{bash}
+tail -100 ../output/08-align-v1-constrain/stringtie_quant/gene_count_matrix.csv
 ```
 
 
@@ -133,7 +78,7 @@ wc -l ../output/04-align-v1/stringtie_quant/gene_count_matrix.csv
 library(DESeq2)
 
 # Load raw counts
-gene_counts <- read.csv("../output/04-align-v1/stringtie_quant/gene_count_matrix.csv", row.names = 1)
+gene_counts <- read.csv("../output/08-align-v1-constrain/stringtie_quant/gene_count_matrix.csv", row.names = 1)
 
 # Make sample metadata
 sample_info <- data.frame(
@@ -146,14 +91,7 @@ dds <- DESeqDataSetFromMatrix(countData = gene_counts, colData = sample_info, de
 dds <- DESeq(dds)
 norm_counts <- counts(dds, normalized = TRUE)
 ```
-```{r}
-# Assume norm_counts is your normalized count matrix (genes x samples)
-cv_values <- apply(norm_counts, 1, function(x) sd(x) / mean(x))
 
-# Sort genes by increasing CV (lower = more stable)
-cv_ranked <- sort(cv_values)
-head(cv_ranked, 20)  # Top 10 most stable genes
-```
 
 ```{r}
 library(limma)
@@ -190,6 +128,49 @@ fit2 <- eBayes(fit2)
 top_table <- topTable(fit2, coef = "Qui_vs_Rio", number = 20)
 head(top_table)
 ```
+
+
+
+
+
+all contrasts
+
+```{r}
+# Get all contrast names
+contrast_names <- colnames(fit2$contrasts)
+
+# Extract all DEGs per contrast
+deg_list <- lapply(contrast_names, function(contrast) {
+  tt <- topTable(fit2, coef = contrast, number = Inf, sort.by = "P")  # all genes
+  tt$gene_id <- rownames(tt)
+  tt$contrast <- contrast
+  tt
+})
+
+# Combine into one long data frame
+all_degs <- bind_rows(deg_list)
+```
+
+
+```{r}
+# Filter for significant DEGs across all contrasts
+sig_degs <- all_degs %>%
+  filter(adj.P.Val < 0.05 & abs(logFC) > 1)
+```
+
+
+
+```{r}
+sig_degs %>%
+  count(contrast)
+```
+
+
+
+
+
+
+
 
 ```{r}
 library(tidyverse)

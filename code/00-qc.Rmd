@@ -1,0 +1,167 @@
+---
+title: "00-qc"
+output: html_document
+date: "2025-08-05"
+---
+
+../output/02-RNAseq
+
+
+```{bash}
+/home/shared/FastQC-0.12.1/fastqc \
+-t 8 \
+-o ../output/02-RNAseq/ \
+../output/02-RNAseq/*fastq.gz
+```
+
+
+```{bash}
+eval "$(/opt/anaconda/anaconda3/bin/conda shell.bash hook)"
+conda activate
+
+cd ../output/02-RNAseq
+multiqc .
+```
+
+```{bash}
+mkdir -p ../output/00-qc/trimmed
+
+for fq in ../output/02-RNAseq/*.fastq.gz; do
+    sample=$(basename "$fq" .fastq.gz)
+    echo "Processing $sample"
+    zcat "$fq" | /opt/anaconda/anaconda3/bin/NanoFilt -q 10 -l 500 > ../output/00-qc/trimmed/${sample}_clean.fastq
+done
+```
+```{bash}
+ls ../output/00-qc/trimmed/
+```
+
+```{bash}
+
+for fq in ../output/00-qc/trimmed/*.fastq; do
+    sample=$(basename "$fq" .fastq)
+    echo "Running Porechop on $sample"
+    
+    /opt/anaconda/anaconda3/bin/porechop -i "$fq" \
+    -o ../output/00-qc/trimmed/${sample}_porechop.fastq \
+    --verbosity 2
+done
+```
+
+
+```{bash}
+
+mkdir -p ../output/00-qc/trimmed/nanoplot_reports
+
+for fq in ../output/00-qc/trimmed/*.fastq; do
+    sample=$(basename "$fq" .fastq)
+    echo "Running NanoPlot on $sample"
+    
+    /opt/anaconda/anaconda3/envs/nanoplot_env/bin/NanoPlot --fastq "$fq" \
+             -o ../output/00-qc/trimmed/nanoplot_reports/"$sample" \
+             --threads 40 \
+             --loglength \
+             --tsv_stats
+done
+
+```
+
+
+```{bash}
+/home/shared/FastQC-0.12.1/fastqc \
+-t 12 \
+-o ../output/00-qc/trimmed/ \
+../output/00-qc/trimmed/*porechop.fastq
+```
+
+```{bash}
+find ../output/00-qc/trimmed/nanoplot_reports/ -name "NanoStats.txt"
+```
+
+multiqc nanoplot_reports/ -o multiqc_nanoplot --module nanoplot
+
+```{bash}
+eval "$(/opt/anaconda/anaconda3/bin/conda shell.bash hook)"
+conda activate
+
+multiqc ../output/00-qc/trimmed/nanoplot_reports \
+  -o ../output/00-qc/trimmed/nanoplot_reports/multiqc_nanoplot_summary \
+  --module nanoplot \
+  --title "NanoPlot QC Summary" \
+  --filename multiqc_nanoplot.html
+
+
+```
+
+/home/sam/programs/mambaforge/envs/multiqc-1.30/bin/multiqc
+
+
+
+
+
+```{bash}
+/home/sam/programs/mambaforge/envs/multiqc-1.30/bin/multiqc \
+../output/00-qc/trimmed/nanoplot_reports/ \
+  -o ../output/00-qc/trimmed/nanoplot_reports/multiqc_nanoplot_summary \
+  --title "NanoPlot QC Summary" \
+  --filename multiqc_nanoplot.html
+
+
+```
+
+
+
+```{bash}
+/home/shared/FastQC-0.12.1/fastqc \
+-t 8 \
+-o ../output/00-qc/trimmed/ \
+../output/00-qc/trimmed/*fastq
+```
+
+
+
+```{bash}
+eval "$(/opt/anaconda/anaconda3/bin/conda shell.bash hook)"
+conda activate
+
+cd ../output/00-qc/trimmed/
+multiqc .
+```
+```{r}
+# Load required packages
+library(tidyverse)
+
+# Define the root directory
+root_dir <- "../output/00-qc/trimmed/nanoplot_reports"
+
+# Get list of all .txt files in subdirectories
+files <- list.files(path = root_dir, pattern = "\\.txt$", recursive = TRUE, full.names = TRUE)
+
+# Function to extract subdirectory name and read file
+read_metrics <- function(file_path) {
+  # Get the subdirectory (immediate parent of file)
+  subdir <- basename(dirname(file_path))
+  
+  # Read file lines
+  lines <- readLines(file_path)
+  
+  # Filter and split key-value lines
+  kv_lines <- lines[grepl("\t", lines)]
+  kv_pairs <- str_split_fixed(kv_lines, "\t", 2)
+  
+  # Convert to data frame
+  df <- as_tibble(t(kv_pairs[, 2]))
+  names(df) <- kv_pairs[, 1]
+  
+  # Add subdirectory name as the first column
+  df <- df %>% mutate(subdirectory = subdir, .before = 1)
+  return(df)
+}
+
+# Read all files and bind into one data frame
+all_metrics <- map_dfr(files, read_metrics)
+
+# Save to CSV
+write_csv(all_metrics, "../output/00-qc/trimmed/nanoplot_reports/compiled_metrics_by_subdir.csv")
+```
+
