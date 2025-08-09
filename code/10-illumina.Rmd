@@ -44,9 +44,9 @@ head -2 ../output/10-illumina/m_splice_sites.tab
 -x ../output/10-illumina/merged_out.fasta.index \
 --dta \
 -p 20 \
--1 ../data/SR30335149_1.fastq \
--2 ../data/SR30335149_2.fastq \
--S ../output/10-illumina/{}.sam \
+-1 ../data/SRR30335149_1.fastq \
+-2 ../data/SRR30335149_2.fastq \
+-S ../output/10-illumina/SRR30335149.sam \
 2> ../output/10-illumina/hisat.out
 ```
 
@@ -65,31 +65,42 @@ done
 
 
 
-```
-find . -name "*.bam" | parallel 'bedtools genomecov -split -bg -ibam {} > {.}.sp.bedGraph'
+```{bash}
+cd ../output/10-illumina/
+find . -name "*sorted.bam" | parallel 'bedtools genomecov -split -bg -ibam {} > {.}.sp.bedGraph'
 ```
 
-# make bigwig
+
 ```{bash}
 
 cut -f1,2 ../data/merged_out.fasta.fai > ../output/10-illumina/genome.chrom.sizes
+
+echo "done"
 ```
 
-#!/bin/bash
+\
 
+```{bash}
 # Loop through all bedGraph files in the current directory
+cd ../output/10-illumina/
+
 for file in *.bedGraph; do
   echo "Fixing sorting for $file"
   LC_COLLATE=C sort -k1,1 -k2,2n "$file" > "${file}.sorted"
   mv "${file}.sorted" "$file"
 done
+```
+
 
 
 
 ```{bash}
+cd ../output/10-illumina/
 for bed in *.bedGraph; do
   base=$(basename "$bed" _combined.sorted.sp.bedGraph)
-  bedGraphToBigWig "$bed" genome.chrom.sizes "${base}.bw"
+  /opt/anaconda/anaconda3/bin/bedGraphToBigWig "$bed" genome.chrom.sizes "${base}.bw"
 done
+
+echo "done"
 ```
 

@@ -199,7 +199,6 @@ upset(fromList(deg_sets), nsets = length(deg_sets), order.by = "freq")
 ```
 
 
-```
 
 
 ## Export DE gene IDs and write FASTA of DE transcripts
