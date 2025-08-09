@@ -1,0 +1,95 @@
+---
+title: "10-illumina"
+output: html_document
+date: "2025-08-09"
+---
+
+# hisat
+
+```{bash}
+mkdir -p ../output/10-illumina
+
+/home/shared/hisat2-2.2.1/hisat2_extract_exons.py \
+../data/GN.gene.gtf \
+> ../output/10-illumina/m_exon.tab
+
+head -2 ../output/10-illumina/m_exon.tab
+```
+
+```{bash}
+
+/home/shared/hisat2-2.2.1/hisat2_extract_splice_sites.py \
+../data/GN.gene.gtf \
+> ../output/10-illumina/m_splice_sites.tab
+
+
+head -2 ../output/10-illumina/m_splice_sites.tab
+```
+
+```{bash}
+/home/shared/hisat2-2.2.1/hisat2-build \
+../data/merged_out.fasta \
+../output/10-illumina/merged_out.fasta.index \
+--exon ../output/10-illumina/m_exon.tab \
+--ss ../output/10-illumina/m_splice_sites.tab \
+-p 40 \
+../data/GN.gene.gtf \
+2> ../output/10-illumina/hisat2-build_stats.txt
+```
+
+
+```{bash}
+
+/home/shared/hisat2-2.2.1/hisat2 \
+-x ../output/10-illumina/merged_out.fasta.index \
+--dta \
+-p 20 \
+-1 ../data/SR30335149_1.fastq \
+-2 ../data/SR30335149_2.fastq \
+-S ../output/10-illumina/{}.sam \
+2> ../output/10-illumina/hisat.out
+```
+
+```{bash}
+for samfile in ../output/10-illumina/*.sam; do
+  bamfile="${samfile%.sam}.bam"
+  sorted_bamfile="${samfile%.sam}.sorted.bam"
+  /home/shared/samtools-1.12/samtools view -bS -@ 20 "$samfile" > "$bamfile"
+  /home/shared/samtools-1.12/samtools sort -@ 20 "$bamfile" -o "$sorted_bamfile"
+  /home/shared/samtools-1.12/samtools index -@ 20 "$sorted_bamfile"
+done
+```
+
+
+# convert bam to biwig
+
+
+
+```
+find . -name "*.bam" | parallel 'bedtools genomecov -split -bg -ibam {} > {.}.sp.bedGraph'
+```
+
+# make bigwig
+```{bash}
+
+cut -f1,2 ../data/merged_out.fasta.fai > ../output/10-illumina/genome.chrom.sizes
+```
+
+#!/bin/bash
+
+# Loop through all bedGraph files in the current directory
+for file in *.bedGraph; do
+  echo "Fixing sorting for $file"
+  LC_COLLATE=C sort -k1,1 -k2,2n "$file" > "${file}.sorted"
+  mv "${file}.sorted" "$file"
+done
+
+
+
+```{bash}
+for bed in *.bedGraph; do
+  base=$(basename "$bed" _combined.sorted.sp.bedGraph)
+  bedGraphToBigWig "$bed" genome.chrom.sizes "${base}.bw"
+done
+```
+
