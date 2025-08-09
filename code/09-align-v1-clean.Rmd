@@ -1,0 +1,248 @@
+---
+title: "09-Align-v1"
+output: html_document
+date: "2025-08-02"
+---
+
+```{bash}
+eval "$(/opt/anaconda/anaconda3/bin/conda shell.bash hook)"
+conda activate
+
+# Set number of threads
+threads=36
+
+# Set paths
+ref_genome="../data/merged_out.fasta"
+input_dir="../output/00-qc/trimmed/porechop"
+output_dir="../output/09-align-v1-clean"
+
+# Loop over each FASTQ file
+for fq in ${input_dir}/*.fastq; do
+  # Extract sample name (e.g., Pum_barcode02 from Pum_barcode02_combined.fastq.gz)
+  sample=$(basename "$fq" .fastq)
+
+  echo "Processing $sample..."
+
+  # Run minimap2 and samtools sort
+  minimap2 -ax splice -k14 --MD -t $threads "$ref_genome" "$fq" | \
+    samtools sort -@ $threads -o "${output_dir}/${sample}.sorted.bam"
+
+  # Index the sorted BAM
+  samtools index "${output_dir}/${sample}.sorted.bam"
+done
+```
+
+# Stringtie
+
+
+
+```{bash}
+mkdir -p ../output/09-align-v1-clean/stringtie_out
+
+for bam in ../output/09-align-v1-clean/*combined_clean_porechop.sorted.bam; do
+    sample=$(basename "$bam" _combined_clean_porechop.sorted.bam)
+    /home/shared/stringtie-2.2.1.Linux_x86_64/stringtie "$bam" \
+        -L \
+        -o ../output/09-align-v1-clean/stringtie_out/${sample}.gtf \
+        -p 24 \
+        -v
+done
+```
+
+
+```{bash}
+ls ../output/09-align-v1-clean/stringtie_out/*.gtf > ../output/09-align-v1-clean/stringtie_out/mergelist.txt
+
+/home/shared/stringtie-2.2.1.Linux_x86_64/stringtie --merge \
+    -L \
+    -G ../data/GN.gene.gtf \
+    -o ../output/09-align-v1-clean/stringtie_out/merged.gtf \
+    ../output/09-align-v1-clean/stringtie_out/mergelist.txt
+```
+
+
+```{bash}
+mkdir -p ../output/09-align-v1-clean/stringtie_quant
+
+for bam in ../output/09-align-v1-clean/*_combined_clean_porechop.sorted.bam; do
+    sample=$(basename "$bam" _combined_clean_porechop.sorted.bam)
+    /home/shared/stringtie-2.2.1.Linux_x86_64/stringtie "$bam" \
+        -L \
+        -e \
+        -B \
+        -G ../output/09-align-v1-clean/stringtie_out/merged.gtf \
+        -o ../output/09-align-v1-clean/stringtie_quant/${sample}.gtf
+done
+```
+
+
+```{bash}
+ls ../output/09-align-v1-clean/stringtie_quant/*.gtf | while read filepath; do
+    sample=$(basename "$filepath" .gtf)
+    echo -e "${sample}\t${filepath}"
+done > ../output/09-align-v1-clean/stringtie_quant/sample_list.txt
+```
+
+
+
+# matrix
+
+
+```{bash}
+python /home/shared/stringtie-2.2.1.Linux_x86_64/prepDE.py \
+-i ../output/09-align-v1-clean/stringtie_quant/sample_list.txt \
+-g ../output/09-align-v1-clean/stringtie_quant/gene_count_matrix.csv \
+-t ../output/09-align-v1-clean/stringtie_quant/transcript_count_matrix.csv
+```
+
+
+
+## normalize matrix
+
+```{r}
+library(DESeq2)
+
+# Load raw counts
+gene_counts <- read.csv("../output/09-align-v1-clean/stringtie_quant/gene_count_matrix.csv", row.names = 1)
+
+# Make sample metadata
+sample_info <- data.frame(
+  row.names = colnames(gene_counts),
+  condition = c("A", "A", "A","A", "B", "B", "B","B","C","C", "C", "C")  # example
+)
+
+# DESeq2 object and normalization
+dds <- DESeqDataSetFromMatrix(countData = gene_counts, colData = sample_info, design = ~ condition)
+dds <- DESeq(dds)
+norm_counts <- counts(dds, normalized = TRUE)
+```
+
+# limma (differential expression)
+
+```{r} 
+library(limma)
+library(tidyverse)
+
+# Prepare expression matrix (genes x samples)
+expr <- as.matrix(norm_counts)
+
+# Create design matrix
+group <- factor(case_when(
+  str_detect(colnames(expr), "^Pum") ~ "Pum",
+  str_detect(colnames(expr), "^Qui") ~ "Qui",
+  str_detect(colnames(expr), "^Rio") ~ "Rio"
+))
+
+design <- model.matrix(~ 0 + group)
+colnames(design) <- levels(group)
+
+# Fit linear model
+fit <- lmFit(expr, design)
+
+# Create contrast for all pairwise comparisons
+contrast_matrix <- makeContrasts(
+  Pum_vs_Qui = Pum - Qui,
+  Pum_vs_Rio = Pum - Rio,
+  Qui_vs_Rio = Qui - Rio,
+  levels = design
+)
+
+fit2 <- contrasts.fit(fit, contrast_matrix)
+fit2 <- eBayes(fit2)
+
+```
+
+## Get all Contrast 
+
+
+```{r}
+# Get all contrast names
+contrast_names <- colnames(fit2$contrasts)
+
+# Extract all DEGs per contrast
+deg_list <- lapply(contrast_names, function(contrast) {
+  tt <- topTable(fit2, coef = contrast, number = Inf, sort.by = "P")  # all genes
+  tt$gene_id <- rownames(tt)
+  tt$contrast <- contrast
+  tt
+})
+
+# Combine into one long data frame
+all_degs <- bind_rows(deg_list)
+```
+
+
+```{r}
+# Filter for significant DEGs across all contrasts
+sig_degs <- all_degs %>%
+  filter(adj.P.Val < 0.05 & abs(logFC) > 1)
+```
+
+
+
+```{r}
+sig_degs %>%
+  dplyr::count(contrast)
+```
+
+
+```{r}
+library(UpSetR)
+
+# Make DEG sets by contrast
+deg_sets <- sig_degs %>%
+  group_by(contrast) %>%
+  summarize(genes = list(gene_id)) %>%
+  deframe()
+
+upset(fromList(deg_sets), nsets = length(deg_sets), order.by = "freq")
+```
+
+
+```
+
+
+## Export DE gene IDs and write FASTA of DE transcripts
+
+```{r}
+# Create output subdirectory for DEG sequences
+dir.create("../output/09-align-v1-clean/deg_seqs", showWarnings = FALSE, recursive = TRUE)
+
+# Write unique DE gene IDs to file
+deg_gene_ids <- unique(sig_degs$gene_id)
+writeLines(deg_gene_ids, con = "../output/09-align-v1-clean/deg_seqs/deg_gene_ids.txt")
+```
+
+
+```{bash}
+# Filter merged GTF to only features belonging to DE gene_ids
+merged_gtf=../output/09-align-v1-clean/stringtie_out/merged.gtf
+deg_ids=../output/09-align-v1-clean/deg_seqs/deg_gene_ids.txt
+filtered_gtf=../output/09-align-v1-clean/deg_seqs/merged.DEgenes.gtf
+
+awk 'BEGIN{while((getline<ARGV[1])>0){ids[$1]=1}; ARGV[1]=""} {
+  if($0 ~ /gene_id/){
+    match($0, /gene_id "([^"]+)"/, a);
+    if(a[1] in ids) print $0;
+  }
+}' "$deg_ids" "$merged_gtf" > "$filtered_gtf"
+
+echo "Filtered GTF written to: $filtered_gtf"
+wc -l "$filtered_gtf"
+```
+
+
+```{bash}
+# Extract spliced transcript FASTA for DE genes using gffread
+ref_genome=../data/merged_out.fasta
+filtered_gtf=../output/09-align-v1-clean/deg_seqs/merged.DEgenes.gtf
+out_fa=../output/09-align-v1-clean/deg_seqs/DEgenes_transcripts.fasta
+
+gffread "$filtered_gtf" -g "$ref_genome" -w "$out_fa"
+
+# Compress FASTA
+gzip -f -c "$out_fa" > "$out_fa.gz"
+echo "Transcript FASTA: $out_fa.gz"
+```
+
+
