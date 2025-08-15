@@ -200,48 +200,71 @@ upset(fromList(deg_sets), nsets = length(deg_sets), order.by = "freq")
 
 
 
+# convert bam to biwig
 
-## Export DE gene IDs and write FASTA of DE transcripts
+
+
+```{bash}
+cd ../output/09-align-v1-clean/
+find . -name "*sorted.bam" | parallel 'bedtools genomecov -split -bg -ibam {} > {.}.sp.bedGraph'
+```
+
+
+```{bash}
+
+cut -f1,2 ../data/merged_out.fasta.fai > ../output/09-align-v1-clean/genome.chrom.sizes
+
+echo "done"
+```
+
+
+
+```{bash}
+# Loop through all bedGraph files in the current directory
+cd ../output/09-align-v1-clean/
+
+for file in *.bedGraph; do
+  echo "Fixing sorting for $file"
+  LC_COLLATE=C sort -k1,1 -k2,2n "$file" > "${file}.sorted"
+  mv "${file}.sorted" "$file"
+done
+```
+
+
+
+```{bash}
+cd ../output/09-align-v1-clean/
+for bed in *.bedGraph; do
+  base=$(basename "$bed" _combined.sorted.sp.bedGraph)
+  /opt/anaconda/anaconda3/bin/bedGraphToBigWig "$bed" genome.chrom.sizes "${base}.bw"
+done
+
+echo "done"
+```
+
+
+
+# GTF of DEG 
+
+```{bash}
+head ../output/09-align-v1-clean/stringtie_out/merged.gtf
+```
 
 ```{r}
-# Create output subdirectory for DEG sequences
-dir.create("../output/09-align-v1-clean/deg_seqs", showWarnings = FALSE, recursive = TRUE)
+library(rtracklayer)
+library(dplyr)
+# 1) Normalize your IDs: keep just "MSTRG.<number>"
+core_ids <- unique(sub('^(MSTRG\\.[0-9]+).*', '\\1', rownames(sig_degs)))
 
-# Write unique DE gene IDs to file
-deg_gene_ids <- unique(sig_degs$gene_id)
-writeLines(deg_gene_ids, con = "../output/09-align-v1-clean/deg_seqs/deg_gene_ids.txt")
+# 2) Import GTF
+gtf <- import("../output/09-align-v1-clean/stringtie_out/merged.gtf")  # your path
+
+# 3) Filter by gene_id
+keep <- gtf[mcols(gtf)$gene_id %in% core_ids]
+
+# 4) Export subset
+export(keep, "../output/09-align-v1-clean/stringtie_out/subset.gtf")
 ```
 
-
-```{bash}
-# Filter merged GTF to only features belonging to DE gene_ids
-merged_gtf=../output/09-align-v1-clean/stringtie_out/merged.gtf
-deg_ids=../output/09-align-v1-clean/deg_seqs/deg_gene_ids.txt
-filtered_gtf=../output/09-align-v1-clean/deg_seqs/merged.DEgenes.gtf
-
-awk 'BEGIN{while((getline<ARGV[1])>0){ids[$1]=1}; ARGV[1]=""} {
-  if($0 ~ /gene_id/){
-    match($0, /gene_id "([^"]+)"/, a);
-    if(a[1] in ids) print $0;
-  }
-}' "$deg_ids" "$merged_gtf" > "$filtered_gtf"
-
-echo "Filtered GTF written to: $filtered_gtf"
-wc -l "$filtered_gtf"
-```
-
-
-```{bash}
-# Extract spliced transcript FASTA for DE genes using gffread
-ref_genome=../data/merged_out.fasta
-filtered_gtf=../output/09-align-v1-clean/deg_seqs/merged.DEgenes.gtf
-out_fa=../output/09-align-v1-clean/deg_seqs/DEgenes_transcripts.fasta
-
-gffread "$filtered_gtf" -g "$ref_genome" -w "$out_fa"
-
-# Compress FASTA
-gzip -f -c "$out_fa" > "$out_fa.gz"
-echo "Transcript FASTA: $out_fa.gz"
-```
 
 
