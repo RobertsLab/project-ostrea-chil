@@ -47,7 +47,7 @@ datatable(head(spgo), options = list(scrollX = TRUE, scrollY = "400px", scrollCo
 ```{r see}
 datatable(
   left_join(bltabl, spgo,  by = c("V3" = "Entry")) %>%
-  select(V1, V3, V13, Protein.names, Organism, Gene.Ontology..biological.process., Gene.Ontology.IDs))
+  select(V1, V3, V13, Protein.names, Organism, Gene.Ontology..biological.process., Gene.Ontology.IDs)
 )
 ```
 

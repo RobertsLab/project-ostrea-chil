@@ -98,7 +98,9 @@ library(limma)
 library(tidyverse)
 
 # Prepare expression matrix (genes x samples)
-expr <- as.matrix(norm_counts)
+# limma expects log-scale data, so log2-transform the linear-scale normalized counts.
+# This also makes logFC a real log2 fold change, so abs(logFC) > 1 below means 2-fold.
+expr <- log2(as.matrix(norm_counts) + 1)
 
 # Create design matrix
 group <- factor(case_when(
@@ -122,7 +124,8 @@ contrast_matrix <- makeContrasts(
 )
 
 fit2 <- contrasts.fit(fit, contrast_matrix)
-fit2 <- eBayes(fit2)
+# limma-trend: fit the mean-variance trend that log-count data still carries
+fit2 <- eBayes(fit2, trend = TRUE)
 
 # Get top DE genes across comparisons
 top_table <- topTable(fit2, coef = "Qui_vs_Rio", number = 20)
