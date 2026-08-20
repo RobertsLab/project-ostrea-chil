@@ -3,6 +3,8 @@
 .RData
 .Ruserdata
 data/*assembly*
+data/merged_out.fasta.TBtools.fa*
+data/*.part
 data/P*
 blastdb
 

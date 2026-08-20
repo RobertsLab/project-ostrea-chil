@@ -82,6 +82,7 @@ Convention: notebook `NN-name.Rmd` writes to `output/NN-name/`, and all paths in
 | [11-identify_unmatched.sh](code/11-identify_unmatched.sh) | Set-difference of assembled transcripts vs Swiss-Prot hits; writes the unmatched FASTA |
 | [11-simple_annotation.sh](code/11-simple_annotation.sh) | Length statistics and ORF screening of the unmatched transcripts |
 | [11-annotate_unmatched_workflow.sh](code/11-annotate_unmatched_workflow.sh) | Broader annotation attempt on the unmatched set: DIAMOND vs nr, plus InterPro / HMMER / KEGG result directories |
+| [12-compare-genomes.py](code/12-compare-genomes.py) | Downloads Assembly 1.0, `Och_HapA`, and `Och_HapB`; reports indexed assembly statistics; runs all three pairwise `minimap2 -x asm5 --secondary=no` alignments; summarizes identity and reciprocal coverage; and draws SVG dot plots |
 
 Note that the shell scripts in the `11-` series use paths relative to the **repository root** (`output/...`, `data/...`), unlike the notebooks. Run them from the repo root.
 
@@ -134,6 +135,22 @@ Then, on a machine with the tool paths above:
 2. Open `project-ostrea-chil.Rproj` in RStudio and run [00-qc.Rmd](code/00-qc.Rmd) chunk by chunk to produce `output/00-qc/trimmed/`.
 3. Run [09-align-v1-clean.Rmd](code/09-align-v1-clean.Rmd) for alignment through differential expression.
 4. Run the `11-*` shell scripts from the repository root for annotation of the resulting transcript set.
+
+The three reference versions can be downloaded and compared independently with
+Python 3, `curl`, and `minimap2`:
+
+```bash
+python3 code/12-compare-genomes.py --threads 16
+```
+
+This stores the downloaded FASTA/FAI files in `data/` and all generated tables,
+compressed PAF alignments, logs, and SVG dot plots in
+`output/12-compare-genomes/`. To inspect assembly sizes without downloading the
+multi-gigabyte FASTA files or running alignments, use:
+
+```bash
+python3 code/12-compare-genomes.py --stats-only
+```
 
 Chunks are meant to be run interactively, not knit end to end: several are long-running, some are alternatives to one another, and `01-repro-annot.Rmd` sets `eval = FALSE` globally by design.
 
