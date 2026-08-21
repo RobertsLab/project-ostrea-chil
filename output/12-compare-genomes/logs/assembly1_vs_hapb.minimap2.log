@@ -1,0 +1,12 @@
+[M::mm_idx_gen::11.675*1.27] collected minimizers
+[M::mm_idx_gen::12.327*1.78] sorted minimizers
+[M::main::12.327*1.78] loaded/built the index for 10 target sequence(s)
+[M::mm_mapopt_update::12.799*1.75] mid_occ = 485
+[M::mm_idx_stat] kmer size: 19; skip: 19; is_hpc: 0; #seq: 10
+[M::mm_idx_stat::13.100*1.74] distinct minimizers: 48862224 (65.47% are singletons); average occurrences: 2.443; average spacing: 9.891; total length: 1180920922
+[M::worker_pipeline::848.692*3.64] mapped 4 sequences
+[M::worker_pipeline::1528.152*4.05] mapped 5 sequences
+[M::worker_pipeline::1900.266*3.46] mapped 1 sequences
+[M::main] Version: 2.24-r1122
+[M::main] CMD: /srlab/programs/miniforge3-24.7.1-0/envs/liftoff_env/bin/minimap2 -x asm5 --secondary=no -t 16 /mmfs1/gscratch/scrubbed/sr320/github/project-ostrea-chil/data/merged_out.fasta.TBtools.fa /mmfs1/gscratch/scrubbed/sr320/github/project-ostrea-chil/data/Och_HapB_assembly.fa
+[M::main] Real time: 1900.377 sec; CPU: 6566.024 sec; Peak RSS: 97.126 GB

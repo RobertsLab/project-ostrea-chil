@@ -1,0 +1,4 @@
+assembly	local_fasta	fasta_bytes	source_url
+Assembly 1.0	/mmfs1/gscratch/scrubbed/sr320/github/project-ostrea-chil/data/merged_out.fasta.TBtools.fa	1200603092	https://gannet.fish.washington.edu/v1_web/owlshell/bu-github/OCEAN/docs/jbrowse/data/v1/merged_out.fasta.TBtools.fa
+Och_HapA	/mmfs1/gscratch/scrubbed/sr320/github/project-ostrea-chil/data/Och_HapA_assembly.fa	802790711	https://gannet.fish.washington.edu/v1_web/owlshell/bu-github/OCEAN/docs/jbrowse/data/HapA/Och_HapA_assembly.fa
+Och_HapB	/mmfs1/gscratch/scrubbed/sr320/github/project-ostrea-chil/data/Och_HapB_assembly.fa	1150829741	https://gannet.fish.washington.edu/v1_web/owlshell/bu-github/OCEAN/docs/jbrowse/data/HapB/Och_HapB_assembly.fa

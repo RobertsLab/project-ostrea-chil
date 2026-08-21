@@ -1,0 +1,31 @@
+assembly	sequence	length_bp
+Assembly 1.0	Chromosome_10A	41401248
+Assembly 1.0	Chromosome_2A	98156180
+Assembly 1.0	Chromosome_4A	93973257
+Assembly 1.0	Chromosome_6A	76092957
+Assembly 1.0	Chromosome_1B	231619483
+Assembly 1.0	Chromosome_5B	125625032
+Assembly 1.0	Chromosome_6B	129267145
+Assembly 1.0	Chromosome_7B	183991082
+Assembly 1.0	Chromosome_8B	108828118
+Assembly 1.0	Chromosome_9B	91966420
+Och_HapA	Chromosome_1A	100680956
+Och_HapA	Chromosome_2A	98156180
+Och_HapA	Chromosome_3A	93095432
+Och_HapA	Chromosome_4A	93973257
+Och_HapA	Chromosome_5A	90413844
+Och_HapA	Chromosome_6A	76092957
+Och_HapA	Chromosome_7A	74165749
+Och_HapA	Chromosome_8A	54853936
+Och_HapA	Chromosome_9A	66796497
+Och_HapA	Chromosome_10A	41401248
+Och_HapB	Chromosome_1B	139369942
+Och_HapB	Chromosome_2B	135219888
+Och_HapB	Chromosome_3B	129725884
+Och_HapB	Chromosome_4B	115719283
+Och_HapB	Chromosome_5B	113891610
+Och_HapB	Chromosome_6B	112639144
+Och_HapB	Chromosome_7B	112150790
+Och_HapB	Chromosome_8B	108828118
+Och_HapB	Chromosome_9B	91966420
+Och_HapB	Chromosome_10B	72452448

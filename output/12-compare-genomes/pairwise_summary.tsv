@@ -1,0 +1,4 @@
+comparison	target	query	alignment_count	matching_bp	alignment_block_bp	identity_pct	target_aligned_bp	target_total_bp	target_coverage_pct	query_aligned_bp	query_total_bp	query_coverage_pct
+assembly1_vs_hapa	Assembly 1.0	Och_HapA	2613	706659746	826810514	85.4682	807490440	1180920922	68.3780	789046759	789630056	99.9261
+assembly1_vs_hapb	Assembly 1.0	Och_HapB	18016	916237187	1195805798	76.6209	991822136	1180920922	83.9872	1126927851	1131963527	99.5551
+hapa_vs_hapb	Och_HapA	Och_HapB	50635	761033798	1265756307	60.1248	777396997	789630056	98.4508	1115345273	1131963527	98.5319
