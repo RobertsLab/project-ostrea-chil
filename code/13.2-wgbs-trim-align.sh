@@ -30,9 +30,24 @@ echo "[$(date)] ${sample} (${population}/${site})"
 
 TRIM="${OUT}/trimmed";  ALN="${OUT}/bismark";  DEDUP="${OUT}/dedup"
 METH="${OUT}/methylation";  QC="${OUT}/fastp"
-mkdir -p "${TRIM}" "${ALN}" "${DEDUP}" "${METH}" "${QC}"
+mkdir -p "${TRIM}" "${ALN}" "${DEDUP}" "${METH}" "${QC}" "${LOGS}"
+
+# One job per sample at a time: two runs of the same sample write identically
+# named Bismark temp files into ${ALN} and clobber each other. mkdir is atomic
+# on GPFS across nodes; a lock left by a killed job is cleared if that job is gone.
+lock="${LOGS}/${sample}.lock"
+if ! mkdir "${lock}" 2>/dev/null; then
+  holder=$(cat "${lock}/job" 2>/dev/null || true)
+  if [[ -n "${holder}" ]] && squeue -h -j "${holder}" 2>/dev/null | grep -q .; then
+    echo "ERROR: ${sample} is already being processed by job ${holder}" >&2
+    exit 1
+  fi
+  echo "Clearing stale lock from job ${holder:-unknown}"
+fi
+echo "${SLURM_JOB_ID:-$$}" > "${lock}/job"
+
 TMP="${TMPDIR:-/tmp}/13-wgbs-${sample}-$$"
-mkdir -p "${TMP}"; trap 'rm -rf "${TMP}"' EXIT
+mkdir -p "${TMP}"; trap 'rm -rf "${TMP}" "${lock}"' EXIT
 
 # ---- 1. trim ------------------------------------------------------------------
 t1="${TRIM}/${sample}_R1.fq.gz";  t2="${TRIM}/${sample}_R2.fq.gz"
@@ -82,6 +97,7 @@ cov="${METH}/${sample}_pe.deduplicated.bismark.cov.gz"
 if [[ ! -s "${cov}" ]]; then
   bismark_methylation_extractor \
     --paired-end --no_overlap \
+    --ignore_r2 "${IGNORE_R2}" \
     --comprehensive --merge_non_CpG \
     --bedGraph --gzip \
     --parallel 8 --buffer_size 40G \

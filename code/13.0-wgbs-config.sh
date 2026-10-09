@@ -24,6 +24,10 @@ LOGS="${OUT}/logs"
 TRIM_FRONT1=10
 TRIM_FRONT2=10
 SCORE_MIN="L,0,-0.6"      # more permissive than Bismark's default L,0,-0.2
+# Pum1 test M-bias: R1 flat after the 10 bp trim, but R2 still elevated at its
+# first 5 bases (29% -> 20% CpG meth, flat from base 6). Skip those 5 bases at
+# extraction instead of re-trimming, so no re-alignment is needed.
+IGNORE_R2=5
 
 # ---- SLURM ----------------------------------------------------------------------
 # Applied by 13-wgbs-submit.sh (overrides the #SBATCH lines in each script).

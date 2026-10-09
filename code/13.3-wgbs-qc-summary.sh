@@ -32,8 +32,11 @@ while IFS=$'\t' read -r sample _; do
     -o "${sample}_bismark_report.html"
 done < <(tail -n +2 "${SAMPLES}")
 
-# bismark2summary scans the working directory for *_pe.bam and matching reports.
-( cd "${OUT}/bismark" && bismark2summary --basename ../reports/bismark_summary_report )
+# Name the BAMs explicitly: left alone, bismark2summary picks up any *_pe.bam
+# in the folder, including stray files from an interrupted run.
+mapfile -t bams < <(tail -n +2 "${SAMPLES}" | cut -f1 | sed 's/$/_pe.bam/' |
+                    while read -r b; do [[ -s "${OUT}/bismark/${b}" ]] && echo "${b}"; done)
+( cd "${OUT}/bismark" && bismark2summary --basename ../reports/bismark_summary_report "${bams[@]}" )
 
 multiqc --force --filename multiqc_13-wgbs --outdir "${REPORTS}" \
   "${OUT}/fastp" "${OUT}/bismark" "${OUT}/dedup" "${OUT}/methylation"
@@ -49,9 +52,11 @@ multiqc --force --filename multiqc_13-wgbs --outdir "${REPORTS}" \
     pairs=$(awk -F'\t' '/^Sequence pairs analysed in total/{print $2}' "${aln}")
     map=$(awk -F'\t' '/^Mapping efficiency/{sub("%","",$2); print $2}' "${aln}")
     dup=$(grep -oP 'Total number duplicated alignments removed:\s+\d+ \(\K[0-9.]+' "${dd}")
+    # CpG from the post-dedup extraction; CHG/CHH from the alignment report,
+    # because --merge_non_CpG leaves only a combined non-CpG line in ${sp}.
     cpg=$(awk -F'\t' '/^C methylated in CpG context/{sub("%","",$2); print $2}' "${sp}")
-    chg=$(awk -F'\t' '/^C methylated in CHG context/{sub("%","",$2); print $2}' "${sp}")
-    chh=$(awk -F'\t' '/^C methylated in CHH context/{sub("%","",$2); print $2}' "${sp}")
+    chg=$(awk -F'\t' '/^C methylated in CHG context/{sub("%","",$2); print $2}' "${aln}")
+    chh=$(awk -F'\t' '/^C methylated in CHH context/{sub("%","",$2); print $2}' "${aln}")
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${sample}" "${pairs}" "${map}" "${dup}" "${cpg}" "${chg}" "${chh}"
   done < <(tail -n +2 "${SAMPLES}")
 } > "${OUT}/alignment_summary.tsv"
