@@ -21,6 +21,8 @@ for f in merged_out.fasta GN.gene.gff3; do
   if [[ ! -s "${GENOME_DIR}/${f}" ]]; then
     echo "Downloading ${f}"
     curl -fL --retry 3 -o "${GENOME_DIR}/${f}.part" "${GANNET}/${f}"
+    # curl 8.14 can exit 0 after a failed --retry, so check the file itself.
+    [[ -s "${GENOME_DIR}/${f}.part" ]] || { echo "ERROR: download of ${f} failed" >&2; exit 1; }
     mv "${GENOME_DIR}/${f}.part" "${GENOME_DIR}/${f}"
   fi
 done

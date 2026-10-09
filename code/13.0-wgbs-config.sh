@@ -42,6 +42,9 @@ activate_env() {
   # shellcheck disable=SC1091
   source "${CONDA_ROOT}/etc/profile.d/conda.sh"
   conda activate myflow
+  # The env was moved from ~/miniforge3, but its curl still has the old
+  # CA-bundle path compiled in; point it at the env's own certificates.
+  export CURL_CA_BUNDLE="${CONDA_PREFIX}/ssl/cacert.pem"
 }
 
 # Refuse to run from anywhere but the repo root, so relative paths are right.
