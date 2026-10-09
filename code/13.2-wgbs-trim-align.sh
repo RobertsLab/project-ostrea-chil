@@ -52,15 +52,19 @@ fi
 # ---- 2. align -----------------------------------------------------------------
 # Directional PE: each --parallel instance runs 2 bowtie2 processes x -p threads,
 # so --parallel 8 -p 2 uses ~32 cores.
+# Bismark refuses --basename with --parallel, so outputs get its default R1-derived
+# names; rename them to ${sample}_pe.bam / ${sample}_PE_report.txt, which dedup,
+# 13.3 (bismark2report/bismark2summary) and the report parsing all expect.
 if [[ ! -s "${bam}" ]]; then
   bismark \
     --genome "${GENOME_DIR}" \
     -1 "${t1}" -2 "${t2}" \
-    --basename "${sample}" \
     --score_min "${SCORE_MIN}" \
     --parallel 8 -p 2 \
     --temp_dir "${TMP}" \
     --output_dir "${ALN}"
+  mv "${ALN}/${sample}_R1_bismark_bt2_PE_report.txt" "${ALN}/${sample}_PE_report.txt"
+  mv "${ALN}/${sample}_R1_bismark_bt2_pe.bam" "${bam}"
   rm -f "${t1}" "${t2}"   # trimmed reads are re-creatable from raw; ~5 GB each
 fi
 
