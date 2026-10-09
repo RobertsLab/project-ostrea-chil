@@ -44,6 +44,8 @@ library(rtracklayer)
 library(limma)
 library(pheatmap)
 library(tidyverse)
+# tidyverse is loaded last, so it masks methylKit::unite (tidyr), and the range
+# versions of reduce (purrr) and setdiff (dplyr/lubridate); those calls are namespaced.
 ```
 
 ```{r parameters}
@@ -143,8 +145,8 @@ ggplot(left_join(cov_summary, samples, by = "sample"),
 meth_filt <- filterByCoverage(meth_raw, lo.count = min_cov, hi.perc = max_cov_pctl)
 meth_norm <- normalizeCoverage(meth_filt, method = "median")
 
-meth_unite <- unite(meth_norm, destrand = FALSE,
-                    min.per.group = min_per_group, mc.cores = cores)
+meth_unite <- methylKit::unite(meth_norm, destrand = FALSE,
+                               min.per.group = min_per_group, mc.cores = cores)
 message(nrow(meth_unite), " CpGs pass in >= ", min_per_group, "/5 oysters per population")
 
 pm <- percMethylation(meth_unite)          # CpG x sample, NAs where a sample was filtered
@@ -205,12 +207,12 @@ seqinfo(gff) <- si                                            # lengths needed f
 
 genes <- gff[gff$type == "gene"]
 names(genes) <- genes$ID
-exons     <- reduce(gff[gff$type == "exon"], ignore.strand = TRUE)
-introns   <- setdiff(reduce(genes, ignore.strand = TRUE), exons)
-promoters <- setdiff(reduce(trim(promoters(genes, upstream = 2000, downstream = 0)),
-                            ignore.strand = TRUE),
-                     reduce(genes, ignore.strand = TRUE))
-intergenic <- gaps(reduce(c(granges(genes), granges(promoters)), ignore.strand = TRUE))
+exons     <- IRanges::reduce(gff[gff$type == "exon"], ignore.strand = TRUE)
+introns   <- BiocGenerics::setdiff(IRanges::reduce(genes, ignore.strand = TRUE), exons)
+upstream  <- trim(promoters(genes, upstream = 2000, downstream = 0))
+promoters <- BiocGenerics::setdiff(IRanges::reduce(upstream, ignore.strand = TRUE),
+                                   IRanges::reduce(genes, ignore.strand = TRUE))
+intergenic <- gaps(IRanges::reduce(c(granges(genes), granges(promoters)), ignore.strand = TRUE))
 intergenic <- intergenic[strand(intergenic) == "*"]
 
 feature_sets <- list(exon = exons, intron = introns,
@@ -286,8 +288,8 @@ this depth.
 ```{r dmr}
 tiles <- tileMethylCounts(meth_norm, win.size = tile_size, step.size = tile_size,
                           cov.bases = tile_min_cpgs, mc.cores = cores)
-tiles_unite <- unite(tiles, destrand = FALSE, min.per.group = min_per_group,
-                     mc.cores = cores)
+tiles_unite <- methylKit::unite(tiles, destrand = FALSE, min.per.group = min_per_group,
+                                mc.cores = cores)
 message(nrow(tiles_unite), " tiles tested")
 
 dmr <- imap(contrasts, function(g, name) {
@@ -299,9 +301,9 @@ dmr_summary <- imap_dfr(dmr, ~ tibble(contrast = .y,
                                       n_dmr = length(.x),
                                       hyper = sum(.x$meth.diff > 0),
                                       hypo  = sum(.x$meth.diff < 0))) %>%
-  left_join(imap_dfr(dmr, ~ as_tibble(table(.x$feature)) %>%
+  left_join(imap_dfr(dmr, ~ as_tibble(table(feature = .x$feature)) %>%
                        mutate(contrast = .y)) %>%
-              pivot_wider(names_from = Var1, values_from = n),
+              pivot_wider(names_from = feature, values_from = n),
             by = "contrast")
 write_tsv(dmr_summary, file.path(out_dir, "DMR_summary.tsv"))
 dmr_summary
