@@ -16,9 +16,9 @@
 #
 # Run from the repository root:
 #   mkdir -p output/14-meth-compare/logs && sbatch code/14.1-meth-compare-orthologs.sh
-# Needs gffread, diamond and samtools on PATH, e.g.
-#   conda create -n meth-compare -c bioconda -c conda-forge gffread diamond samtools
-# then set CONDA_ENV=meth-compare (or activate it before running).
+# Needs gffread, diamond and samtools: uses the `wgbs-annot` env shared with 13.5
+# (see that script for the one-time conda create). Set CONDA_ENV= (empty) to use
+# whatever is already on PATH instead.
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
@@ -28,7 +28,7 @@ OUT="output/14-meth-compare/orthologs"
 THREADS="${SLURM_CPUS_PER_TASK:-8}"
 EVALUE="1e-10"
 CONDA_ROOT="/mmfs1/gscratch/srlab/sr320/miniforge3"
-CONDA_ENV="${CONDA_ENV:-}"
+CONDA_ENV="${CONDA_ENV-wgbs-annot}"
 
 [[ -f "${SPECIES_TSV}" ]] || { echo "ERROR: run from the repository root" >&2; exit 1; }
 if [[ -n "${CONDA_ENV}" ]]; then
