@@ -1,0 +1,857 @@
+---
+title: "13.6 - Genome-wide DNA methylation landscape"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+date: "2026-10-08"
+---
+
+General characterization of CpG methylation in *Ostrea chilensis*: how much of the
+genome is methylated, how methylation is distributed across genomic features and
+along chromosomes, what gene-body methylation looks like, and whether gene
+methylation tracks gene function. Population differences are in `13.4`; this
+notebook describes the shared methylome, pooling all 15 oysters.
+
+**Upstream:**
+
+- `code/13-wgbs-submit.sh` (13.1 → 13.2 → 13.3) finished: reads the strand-merged
+  CpG files `output/13-wgbs/methylation/*.CpG_report.merged_CpG_evidence.cov.gz`.
+- `code/13.5-wgbs-gene-annotation.sh` finished: reads
+  `output/13-wgbs/13.5-gene-annotation/GN_gene_annotation.tsv` (Swiss-Prot best hit +
+  GO per GN gene). Only the last section needs it.
+
+**Reference:** `merged_out.fasta` + `GN.gene.gff3`, as in `09` and `13.4`. The GFF has
+gene / mRNA / exon / CDS only, with every exon identical to a CDS: there are **no
+UTRs**, so "exon" here means coding exon and 5'/3' UTR methylation can't be separated
+from the flanks.
+
+**Pooling.** At ~6–9x raw coverage per oyster, single-sample per-CpG estimates are
+noisy. For the landscape, counts are summed across all 15 oysters per CpG (a
+species-level methylome at roughly 15x the depth). Per-oyster values are kept for
+global, per-feature, and per-gene summaries, which pool many CpGs and so are stable
+within a single animal; these show whether the patterns are consistent across
+individuals and populations.
+
+**Where to run:** a compute node inside the lab R container (~100 GB RAM), e.g.
+
+```
+salloc -A srlab -p cpu-g2-mem2x -c 8 --mem=150G -t 8:00:00
+apptainer exec /gscratch/srlab/containers/srlab-R4.4-bioinformatics-container-c3d3116.sif R
+```
+
+Paths are relative to `code/`, like the other notebooks.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 8, fig.height = 5)
+```
+
+```{r packages}
+# tidyverse first, so the Bioconductor set operations (reduce, setdiff, union, ...)
+# mask the dplyr/purrr versions rather than the other way round.
+library(tidyverse)
+library(data.table)
+library(GenomicRanges)
+library(rtracklayer)
+library(Biostrings)
+library(Rsamtools)
+```
+
+```{r parameters}
+out_dir    <- "../output/13-wgbs/13.6-landscape"
+meth_dir   <- "../output/13-wgbs/methylation"
+genome_dir <- "../data/13-wgbs-genome"
+annot_file <- "../output/13-wgbs/13.5-gene-annotation/GN_gene_annotation.tsv"
+repeat_gff <- NULL   # RepeatMasker/EDTA GFF for this assembly, if one becomes available
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+# CpG level (pooled across oysters)
+min_cov_pooled  <- 10     # summed reads per CpG
+max_cov_pctl    <- 0.999  # drop pile-ups (collapsed repeats)
+min_samples     <- 8L     # CpG must have data in >= 8 of 15 oysters
+meth_breaks     <- c(-Inf, 10, 50, Inf)                 # % methylation
+meth_labels     <- c("unmethylated (<10%)", "sparse (10-50%)", "methylated (>=50%)")
+
+# features
+flank_bp        <- 2000   # promoter (upstream) and downstream flank; same promoter as 13.4
+window_size     <- 1e5    # chromosome-scale windows
+
+# genes
+min_gene_cpgs   <- 5      # covered CpGs needed for a gene-body estimate
+min_gene_calls  <- 30     # per-oyster reads summed over the gene, for per-oyster values
+n_body_bins     <- 20     # metagene: scaled gene body
+n_flank_bins    <- 10     # metagene: each 2 kb flank
+
+# function
+min_go_genes    <- 10
+max_go_genes    <- 500
+```
+
+# Samples
+
+```{r samples}
+samples <- read_tsv("../data/13-wgbs-samples.tsv", show_col_types = FALSE) %>%
+  mutate(population = factor(population, levels = c("Pum", "Qui", "Rio")),
+         file = file.path(meth_dir,
+                          paste0(sample, ".CpG_report.merged_CpG_evidence.cov.gz")))
+stopifnot(all(file.exists(samples$file)))
+```
+
+# Genome and features
+
+Five non-overlapping compartments, so every base and CpG belongs to exactly one:
+
+| feature | definition |
+|---|---|
+| exon | coding exon (no UTRs annotated) |
+| intron | gene body minus exons |
+| promoter | 2 kb upstream of a TSS, outside any gene |
+| downstream | 2 kb downstream of a TES, outside any gene or promoter |
+| intergenic | everything else |
+
+```{r genome}
+seqlens <- read_tsv(file.path(genome_dir, "genome.chrom.sizes"),
+                    col_names = c("chr", "len"), show_col_types = FALSE)
+si <- Seqinfo(seqlens$chr, seqlens$len)
+fa <- FaFile(file.path(genome_dir, "merged_out.fasta"))
+
+gff <- import(file.path(genome_dir, "GN.gene.gff3"))
+seqlevels(gff, pruning.mode = "coarse") <- seqlevels(si)
+seqinfo(gff) <- si
+
+genes <- gff[gff$type == "gene"]
+names(genes) <- genes$ID
+exon_gr <- gff[gff$type == "exon"]
+stopifnot(all(lengths(exon_gr$Parent) == 1))
+exon_gr$tx <- as.character(unlist(exon_gr$Parent))
+exon_gr$gene_id <- sub("\\.[0-9]+$", "", exon_gr$tx)
+
+gene_red   <- reduce(genes, ignore.strand = TRUE)
+exons      <- reduce(exon_gr, ignore.strand = TRUE)
+introns    <- setdiff(gene_red, exons)
+promoters  <- setdiff(reduce(trim(promoters(genes, upstream = flank_bp, downstream = 0)),
+                             ignore.strand = TRUE), gene_red)
+downstream <- setdiff(reduce(trim(flank(genes, flank_bp, start = FALSE)), ignore.strand = TRUE),
+                      union(gene_red, promoters))
+intergenic <- gaps(reduce(c(gene_red, promoters, downstream)))
+intergenic <- intergenic[strand(intergenic) == "*"]
+
+feature_levels <- c("exon", "intron", "promoter", "downstream", "intergenic")
+features <- c(exons, introns, promoters, downstream, intergenic)
+features$feature <- factor(rep(feature_levels,
+                               lengths(list(exons, introns, promoters, downstream, intergenic))),
+                           levels = feature_levels)
+stopifnot(!any(countOverlaps(features, features) > 1))      # disjoint
+stopifnot(sum(as.numeric(width(features))) == sum(as.numeric(seqlengths(si))))
+
+annotate_feature <- function(gr) {
+  features$feature[findOverlaps(gr, features, ignore.strand = TRUE, select = "first")]
+}
+
+# Every CpG dinucleotide in the assembly (1-based position of the C, as in Bismark).
+genome_seq <- scanFa(fa)
+names(genome_seq) <- sub(" .*", "", names(genome_seq))
+genome_cpg <- do.call(c, lapply(seqlevels(si), function(chr) {
+  GRanges(chr, IRanges(start(matchPattern("CG", genome_seq[[chr]])), width = 1),
+          seqinfo = si)
+}))
+genome_cpg$feature <- annotate_feature(genome_cpg)
+rm(genome_seq); invisible(gc())
+message(length(genome_cpg), " CpGs in the assembly")
+```
+
+```{r feature-composition}
+# Observed/expected CpG per feature: CG * length / (C * G). Germline methylation
+# deaminates mC -> T over evolutionary time, so long-term methylated sequence is CpG-depleted.
+composition <- map_dfr(feature_levels, function(f) {
+  gr  <- features[features$feature == f]
+  seq <- getSeq(fa, gr)
+  bf  <- colSums(letterFrequency(seq, c("C", "G")))
+  tibble(feature   = f,
+         bp        = sum(as.numeric(width(gr))),
+         n_cpg     = sum(as.numeric(vcountPattern("CG", seq))),
+         gc_pct    = 100 * sum(bf) / bp,
+         cpg_oe    = n_cpg * bp / (bf[["C"]] * bf[["G"]]))
+}) %>%
+  mutate(pct_genome = 100 * bp / sum(bp),
+         cpg_per_kb = 1000 * n_cpg / bp)
+composition
+```
+
+# Read CpG calls
+
+Each oyster is read once. Per-oyster summaries (global, per feature, per gene) are
+taken on the way through; per-CpG counts are summed into one pooled table.
+
+```{r read}
+read_cov <- function(f) {
+  fread(cmd = paste("gzip -dc", shQuote(f)), header = FALSE,
+        select = c(1, 2, 5, 6), col.names = c("chr", "pos", "meth", "unmeth"))
+}
+
+pooled <- NULL
+ps_global <- ps_feature <- ps_gene <- vector("list", nrow(samples))
+
+for (i in seq_len(nrow(samples))) {
+  s <- samples$sample[i]
+  d <- read_cov(samples$file[i])[chr %in% seqlevels(si)]
+  d[, cov := meth + unmeth]
+  gr <- GRanges(d$chr, IRanges(d$pos, width = 1), seqinfo = si)
+  d[, feature := annotate_feature(gr)]
+
+  ps_global[[i]] <- d[, .(sample = s, cpgs_1x = .N, cpgs_5x = sum(cov >= 5),
+                          median_cov = median(cov),
+                          global_meth_pct = 100 * sum(meth) / sum(cov),
+                          methylated_cpg_pct = 100 * mean(meth[cov >= 5] / cov[cov >= 5] >= 0.5))]
+  ps_feature[[i]] <- d[, .(sample = s, meth = sum(meth), cov = sum(cov), n_cpg = .N),
+                       by = feature]
+  ov <- findOverlaps(gr, genes, ignore.strand = TRUE)
+  ps_gene[[i]] <- data.table(gene_id = names(genes)[subjectHits(ov)],
+                             meth = d$meth[queryHits(ov)], cov = d$cov[queryHits(ov)]
+                             )[, .(sample = s, meth = sum(meth), cov = sum(cov), n_cpg = .N),
+                               by = gene_id]
+
+  pooled <- rbind(pooled, d[, .(chr, pos, meth, unmeth, n = 1L)]
+                  )[, .(meth = sum(meth), unmeth = sum(unmeth), n = sum(n)), by = .(chr, pos)]
+  message(s, ": ", nrow(d), " CpGs; pooled table now ", nrow(pooled))
+}
+
+ps_global  <- rbindlist(ps_global)  %>% left_join(samples, by = "sample")
+ps_feature <- rbindlist(ps_feature) %>% left_join(samples, by = "sample")
+ps_gene    <- rbindlist(ps_gene)
+rm(d, gr, ov); invisible(gc())
+```
+
+```{r pooled-filter}
+pooled[, cov := meth + unmeth]
+cov_max <- quantile(pooled$cov, max_cov_pctl)
+pooled_f <- pooled[cov >= min_cov_pooled & cov <= cov_max & n >= min_samples]
+
+cpg <- GRanges(pooled_f$chr, IRanges(pooled_f$pos, width = 1), seqinfo = si,
+               meth = pooled_f$meth, cov = pooled_f$cov,
+               pct = 100 * pooled_f$meth / pooled_f$cov)
+cpg$feature <- annotate_feature(cpg)
+cpg$class   <- cut(cpg$pct, meth_breaks, meth_labels, right = FALSE)
+
+tibble(step = c("CpGs in assembly", "covered in >= 1 oyster", "pass pooled filters"),
+       n = c(length(genome_cpg), nrow(pooled), length(cpg))) %>%
+  mutate(pct_of_assembly = round(100 * n / length(genome_cpg), 1))
+
+# Pooled per-CpG methylation track for IGV (alongside the 13.2 BAMs).
+bw <- granges(cpg); bw$score <- cpg$pct
+export.bw(sort(bw), file.path(out_dir, "pooled_CpG_methylation.bw"))
+fwrite(pooled_f[, .(chr, start = pos, end = pos + 1L, pct = round(100 * meth / cov, 2),
+                    meth, unmeth, n_samples = n)],
+       file.path(out_dir, "pooled_CpG_methylation.tsv.gz"), sep = "\t")
+rm(pooled, pooled_f); invisible(gc())
+```
+
+# Global methylation
+
+## Per oyster
+
+CpG methylation in invertebrates is moderate overall (bivalves typically ~10–20% of
+CpGs methylated), unlike the ~70–80% of vertebrates.
+
+```{r global-per-oyster}
+aln <- read_tsv("../output/13-wgbs/alignment_summary.tsv", show_col_types = FALSE)
+global <- ps_global %>%
+  left_join(select(aln, sample, CHG_meth_pct, CHH_meth_pct), by = "sample") %>%
+  select(sample, population, cpgs_1x, cpgs_5x, median_cov,
+         global_meth_pct, methylated_cpg_pct, CHG_meth_pct, CHH_meth_pct)
+write_tsv(global, file.path(out_dir, "global_methylation_per_oyster.tsv"))
+global
+
+global %>%
+  pivot_longer(c(global_meth_pct, CHG_meth_pct, CHH_meth_pct),
+               names_to = "context", values_to = "pct") %>%
+  mutate(context = sub("_meth_pct", "", sub("global", "CpG", context))) %>%
+  ggplot(aes(population, pct, colour = population)) +
+  geom_jitter(width = 0.1, size = 2.5) +
+  facet_wrap(~context, scales = "free_y") +
+  labs(y = "% methylation (read-level)", title = "Methylation by context") +
+  theme_bw() + theme(legend.position = "none")
+
+kruskal.test(global_meth_pct ~ population, data = global)
+```
+
+## Per-CpG distribution (pooled)
+
+A mosaic methylome shows up as a bimodal distribution: most CpGs near 0%, a smaller
+fully methylated mode near 100%, and few intermediate sites.
+
+```{r global-distribution}
+ggplot(tibble(pct = cpg$pct), aes(pct)) +
+  geom_histogram(binwidth = 2, boundary = 0) +
+  labs(x = "% methylation per CpG (pooled)", y = "CpGs") + theme_bw()
+
+class_summary <- as_tibble(table(class = cpg$class)) %>%
+  mutate(pct = 100 * n / sum(n))
+write_tsv(class_summary, file.path(out_dir, "cpg_class_summary.tsv"))
+class_summary
+```
+
+# Genomic features
+
+```{r feature-summary}
+cpg_tab <- as_tibble(as.data.frame(mcols(cpg)[, c("feature", "pct", "class")]))
+
+feature_summary <- composition %>%
+  left_join(as_tibble(table(feature = genome_cpg$feature)) %>% dplyr::rename(cpg_in_assembly = n),
+            by = "feature") %>%
+  left_join(cpg_tab %>%
+              group_by(feature) %>%
+              summarise(cpg_covered    = n(),
+                        mean_meth      = mean(pct),
+                        median_meth    = median(pct),
+                        pct_methylated = 100 * mean(class == meth_labels[3]),
+                        pct_sparse     = 100 * mean(class == meth_labels[2]),
+                        pct_unmeth     = 100 * mean(class == meth_labels[1])),
+            by = "feature") %>%
+  mutate(feature = factor(feature, feature_levels),
+         pct_cpg_covered = 100 * cpg_covered / cpg_in_assembly)
+write_tsv(feature_summary, file.path(out_dir, "feature_summary.tsv"))
+feature_summary
+```
+
+```{r feature-plots, fig.height=4}
+cpg_tab %>%
+  ggplot(aes(feature, fill = class)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = c("grey80", "#9ecae1", "#08519c")) +
+  labs(y = "Proportion of covered CpGs", fill = NULL) + theme_bw()
+
+cpg_tab %>%
+  ggplot(aes(feature, pct)) +
+  geom_violin(fill = "grey85", scale = "width") +
+  stat_summary(fun = mean, geom = "point", colour = "red") +
+  labs(y = "% methylation per CpG (pooled)") + theme_bw()
+```
+
+## Where the methylated CpGs are
+
+Share of the genome, of all assembly CpGs, of covered CpGs, and of methylated CpGs
+falling in each feature. Enrichment of methylated CpGs is tested per feature against
+all other features (Fisher), using covered CpGs as the background.
+
+```{r feature-enrichment}
+meth_cpg <- cpg_tab$class == meth_labels[3]
+
+feature_share <- bind_rows(
+  composition %>% transmute(feature, set = "genome (bp)", n = bp),
+  as_tibble(table(feature = genome_cpg$feature)) %>% mutate(set = "assembly CpGs"),
+  as_tibble(table(feature = cpg_tab$feature)) %>% mutate(set = "covered CpGs"),
+  as_tibble(table(feature = cpg_tab$feature[meth_cpg])) %>% mutate(set = "methylated CpGs")
+) %>%
+  group_by(set) %>% mutate(share = n / sum(n)) %>% ungroup() %>%
+  mutate(set = fct_inorder(set), feature = factor(feature, feature_levels))
+
+ggplot(feature_share, aes(set, share, fill = feature)) +
+  geom_col() + scale_fill_brewer(palette = "Set2") +
+  labs(x = NULL, y = "Share") + theme_bw()
+
+feature_enrichment <- map_dfr(feature_levels, function(f) {
+  in_f <- cpg_tab$feature == f
+  ft <- fisher.test(table(in_f, meth_cpg))
+  tibble(feature = f, odds_ratio = unname(ft$estimate),
+         ci_low = ft$conf.int[1], ci_high = ft$conf.int[2], p = ft$p.value)
+}) %>% mutate(p_adj = p.adjust(p, "BH"))
+write_tsv(feature_enrichment, file.path(out_dir, "feature_methylated_cpg_enrichment.tsv"))
+feature_enrichment
+```
+
+## Consistency across oysters
+
+Per-oyster coverage-weighted methylation in each feature. If the feature ranking
+holds in every animal, the pooled pattern isn't driven by a few deep samples.
+
+```{r feature-per-oyster}
+ps_feature %>%
+  mutate(pct = 100 * meth / cov) %>%
+  ggplot(aes(feature, pct, colour = population)) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.6)) +
+  labs(y = "% methylation (read-level, per oyster)") + theme_bw()
+```
+
+## Repeats
+
+```{r repeats, eval = !is.null(repeat_gff)}
+# Not run until a repeat annotation for merged_out.fasta exists. Repeats overlap the
+# five features, so they are reported as a second, orthogonal layer.
+reps <- import(repeat_gff)
+seqlevels(reps, pruning.mode = "coarse") <- seqlevels(si)
+rep_class <- sub("/.*", "", coalesce(reps$Target, reps$type))   # adjust to the GFF's class field
+cpg$repeat_class <- "non-repeat"
+h <- findOverlaps(cpg, reps, ignore.strand = TRUE, select = "first")
+cpg$repeat_class[!is.na(h)] <- rep_class[h[!is.na(h)]]
+
+as_tibble(as.data.frame(mcols(cpg)[, c("feature", "repeat_class", "pct")])) %>%
+  group_by(feature, repeat_class) %>%
+  summarise(n = n(), mean_meth = mean(pct), .groups = "drop") %>%
+  arrange(feature, dplyr::desc(n))
+```
+
+# Chromosome-scale distribution
+
+Methylation in `r window_size / 1000` kb windows along each chromosome, against gene
+density. In mosaic methylomes methylation tracks gene density.
+
+```{r windows, fig.width=11, fig.height=6}
+win <- tileGenome(seqlengths(si), tilewidth = window_size, cut.last.tile.in.chrom = TRUE)
+win <- binnedAverage(win, coverage(gene_red), "gene_frac")
+win$n_cpg_assembly <- countOverlaps(win, genome_cpg)
+h <- findOverlaps(cpg, win)
+win_meth <- data.table(w = subjectHits(h), meth = cpg$meth[queryHits(h)],
+                       cov = cpg$cov[queryHits(h)], pct = cpg$pct[queryHits(h)]
+                       )[, .(meth_pct = 100 * sum(meth) / sum(cov),
+                             frac_methylated = mean(pct >= 50), n_cpg = .N), by = w]
+
+windows <- as_tibble(as.data.frame(win)) %>%
+  mutate(w = row_number()) %>%
+  left_join(win_meth, by = "w") %>%
+  filter(n_cpg >= 20) %>%
+  mutate(cpg_per_kb = 1000 * n_cpg_assembly / width)
+write_tsv(windows, file.path(out_dir, "window_methylation.tsv"))
+
+windows %>%
+  transmute(seqnames, mb = (start + end) / 2e6,
+            `CpG methylation (%)` = meth_pct, `gene coverage (%)` = 100 * gene_frac) %>%
+  pivot_longer(-c(seqnames, mb)) %>%
+  ggplot(aes(mb, value)) +
+  geom_line(linewidth = 0.2) +
+  geom_smooth(method = "loess", span = 0.2, se = FALSE, colour = "red", linewidth = 0.5) +
+  facet_grid(name ~ seqnames, scales = "free", space = "free_x") +
+  labs(x = "Position (Mb)", y = NULL) + theme_bw() +
+  theme(strip.text.x = element_text(size = 7), axis.text.x = element_text(size = 6))
+
+cor.test(windows$meth_pct, windows$gene_frac, method = "spearman")
+cor.test(windows$meth_pct, windows$cpg_per_kb, method = "spearman")
+
+ggplot(windows, aes(100 * gene_frac, meth_pct)) +
+  geom_bin2d(bins = 60) + geom_smooth(method = "loess", colour = "red") +
+  labs(x = "Gene coverage in window (%)", y = "Window CpG methylation (%)") + theme_bw()
+```
+
+# Gene-body methylation
+
+## Per gene
+
+Pooled coverage-weighted methylation over all covered CpGs in each gene, plus
+the same for its exons, introns, and 2 kb promoter. Genes need ≥ `r min_gene_cpgs`
+covered CpGs. CpG O/E and GC are computed from sequence for every gene.
+
+```{r gene-level}
+region_meth <- function(gr, ids, label) {
+  h <- findOverlaps(cpg, gr, ignore.strand = TRUE)
+  data.table(gene_id = ids[subjectHits(h)], meth = cpg$meth[queryHits(h)],
+             cov = cpg$cov[queryHits(h)], pct = cpg$pct[queryHits(h)]
+             )[, .(pct = 100 * sum(meth) / sum(cov), n = .N,
+                   frac_meth_cpg = mean(pct >= 50)), by = gene_id] %>%
+    as_tibble() %>%
+    rename_with(~ paste0(label, "_", .x), -gene_id)
+}
+
+gene_promoters <- trim(promoters(genes, upstream = flank_bp, downstream = 0))
+gene_introns   <- psetdiff(granges(genes),
+                           split(granges(exon_gr), factor(exon_gr$gene_id, names(genes))))
+gene_introns   <- unlist(gene_introns)
+
+gene_seq  <- getSeq(fa, genes)
+gene_comp <- letterFrequency(gene_seq, c("C", "G")) * 1   # double: C * G overflows integer
+n_exons   <- table(factor(exon_gr$gene_id, names(genes)))
+
+gene_meth <- tibble(gene_id   = names(genes),
+                    chr       = as.character(seqnames(genes)),
+                    length    = width(genes),
+                    n_exons   = as.integer(n_exons[names(genes)]),
+                    n_cpg     = as.numeric(vcountPattern("CG", gene_seq)),
+                    gc_pct    = 100 * rowSums(gene_comp) / width(genes),
+                    cpg_oe    = n_cpg * width(genes) / (gene_comp[, "C"] * gene_comp[, "G"])) %>%
+  left_join(region_meth(genes, names(genes), "body"), by = "gene_id") %>%
+  left_join(region_meth(exon_gr, exon_gr$gene_id, "exon"), by = "gene_id") %>%
+  left_join(region_meth(gene_introns, names(gene_introns), "intron"), by = "gene_id") %>%
+  left_join(region_meth(gene_promoters, names(gene_promoters), "promoter"), by = "gene_id") %>%
+  mutate(body_n = replace_na(body_n, 0L),
+         body_class = cut(if_else(body_n >= min_gene_cpgs, body_pct, NA_real_),
+                          meth_breaks, meth_labels, right = FALSE))
+rm(gene_seq); invisible(gc())
+
+gbm <- filter(gene_meth, !is.na(body_class))
+message(nrow(gbm), " of ", nrow(gene_meth), " genes with >= ", min_gene_cpgs, " covered CpGs")
+table(gbm$body_class)
+```
+
+## Distribution
+
+Bivalve gene-body methylation is usually bimodal: one group of genes heavily
+methylated, the other nearly unmethylated. The local minimum of the density
+between the modes is printed as a check on the fixed 10/50% class breaks.
+
+```{r gene-distribution}
+dens <- density(gbm$body_pct, from = 0, to = 100)
+mid  <- dens$x > 10 & dens$x < 90
+message("Density minimum between modes: ", round(dens$x[mid][which.min(dens$y[mid])], 1), "%")
+
+ggplot(gbm, aes(body_pct)) +
+  geom_histogram(binwidth = 2, boundary = 0) +
+  geom_vline(xintercept = c(10, 50), linetype = 2, colour = "grey50") +
+  labs(x = "Gene-body CpG methylation (%)", y = "Genes") + theme_bw()
+
+ggplot(gbm, aes(exon_pct, intron_pct)) +
+  geom_bin2d(bins = 60) + geom_abline(linetype = 2, colour = "red") +
+  labs(x = "Exon methylation (%)", y = "Intron methylation (%)") + theme_bw()
+
+ggplot(gbm, aes(promoter_pct, body_pct)) +
+  geom_bin2d(bins = 60) +
+  labs(x = "Promoter (2 kb upstream) methylation (%)", y = "Gene-body methylation (%)") +
+  theme_bw()
+```
+
+## CpG O/E and gene structure
+
+Genes methylated in the germline lose CpGs over evolutionary time, so methylated
+genes are expected to have lower CpG O/E. A bimodal CpG O/E distribution across all
+genes (not only those with WGBS coverage) is the sequence-level signature of this.
+
+```{r gene-structure}
+ggplot(gene_meth, aes(cpg_oe)) +
+  geom_histogram(bins = 80) + xlim(0, 1.5) +
+  labs(x = "Gene CpG O/E (all genes)", y = "Genes") + theme_bw()
+
+ggplot(gbm, aes(cpg_oe, fill = body_class)) +
+  geom_density(alpha = 0.5) + xlim(0, 1.5) +
+  scale_fill_manual(values = c("grey70", "#9ecae1", "#08519c")) +
+  labs(x = "Gene CpG O/E", fill = NULL) + theme_bw()
+
+cor.test(gbm$body_pct, gbm$cpg_oe, method = "spearman")
+
+gbm %>%
+  transmute(body_class, `gene length (kb)` = length / 1000, `exons` = n_exons,
+            `GC (%)` = gc_pct) %>%
+  pivot_longer(-body_class) %>%
+  ggplot(aes(body_class, value, fill = body_class)) +
+  geom_boxplot(outlier.size = 0.3) + scale_y_log10() +
+  scale_fill_manual(values = c("grey70", "#9ecae1", "#08519c")) +
+  facet_wrap(~name, scales = "free_y") + labs(x = NULL) + theme_bw() +
+  theme(legend.position = "none", axis.text.x = element_text(angle = 20, hjust = 1))
+
+write_tsv(gene_meth, file.path(out_dir, "gene_methylation.tsv"))
+```
+
+## Metagene profile
+
+Methylation along a scaled gene body (TSS → TES, `r n_body_bins` bins) with
+`r flank_bp / 1000` kb flanks (`r n_flank_bins` bins each), oriented by strand. Flanks
+can run into neighbouring genes; that is left in, as it is what a CpG near a TSS
+actually sees.
+
+```{r metagene, fig.height=4}
+ext <- trim(resize(genes, width(genes) + 2 * flank_bp, fix = "center"))
+h   <- findOverlaps(cpg, ext, ignore.strand = TRUE)
+flank_step <- flank_bp / n_flank_bins
+
+mg <- data.table(gene_id = names(genes)[subjectHits(h)],
+                 pos = start(cpg)[queryHits(h)],
+                 gs = start(genes)[subjectHits(h)], ge = end(genes)[subjectHits(h)],
+                 minus = as.character(strand(genes))[subjectHits(h)] == "-",
+                 meth = cpg$meth[queryHits(h)], cov = cpg$cov[queryHits(h)],
+                 pct = cpg$pct[queryHits(h)])
+mg[, `:=`(rel = fifelse(minus, ge - pos, pos - gs), len = ge - gs + 1)]   # 0 = TSS
+mg[, bin := fcase(rel < 0,   floor(rel / flank_step),                       # -10 .. -1
+                  rel < len, floor(rel / len * n_body_bins),                #   0 .. 19
+                  default = n_body_bins + floor((rel - len) / flank_step))] #  20 .. 29
+mg <- mg[bin >= -n_flank_bins & bin < n_body_bins + n_flank_bins]
+mg <- merge(mg, as.data.table(gene_meth[, c("gene_id", "body_class")]), by = "gene_id")
+
+metagene <- rbind(
+  mg[, .(body_class = "all genes", meth_pct = 100 * sum(meth) / sum(cov),
+         frac_methylated = mean(pct >= 50), n_cpg = .N), by = bin],
+  mg[!is.na(body_class), .(meth_pct = 100 * sum(meth) / sum(cov),
+                           frac_methylated = mean(pct >= 50), n_cpg = .N),
+     by = .(bin, body_class = as.character(body_class))],
+  use.names = TRUE)
+metagene[, body_class := factor(body_class, c("all genes", meth_labels))]
+write_tsv(metagene, file.path(out_dir, "metagene_profile.tsv"))
+
+ggplot(metagene, aes(bin + 0.5, meth_pct, colour = body_class)) +
+  geom_line() +
+  geom_vline(xintercept = c(0, n_body_bins), linetype = 2, colour = "grey50") +
+  scale_x_continuous(breaks = c(-n_flank_bins, 0, n_body_bins, n_body_bins + n_flank_bins),
+                     labels = c(paste0("-", flank_bp / 1000, " kb"), "TSS", "TES",
+                                paste0("+", flank_bp / 1000, " kb"))) +
+  scale_colour_manual(values = c("black", "grey60", "#9ecae1", "#08519c")) +
+  labs(x = NULL, y = "CpG methylation (%)", colour = NULL) + theme_bw()
+rm(mg); invisible(gc())
+```
+
+## Exon and intron rank
+
+Methylation by position of the exon/intron along the transcript (5' → 3'), for
+multi-exon genes. In many invertebrates the first exon and 5' end are less
+methylated than the rest of the body.
+
+```{r exon-rank, fig.height=4}
+ex <- data.table(seqnames = as.character(seqnames(exon_gr)), start = start(exon_gr),
+                 end = end(exon_gr), strand = as.character(strand(exon_gr)),
+                 tx = exon_gr$tx, gene_id = exon_gr$gene_id)
+setorder(ex, tx, start)
+ex[, `:=`(n_ex = .N, idx = seq_len(.N)), by = tx]
+ex[, rank := fifelse(strand == "-", n_ex - idx + 1L, idx)]
+
+intr <- ex[n_ex > 1, .(seqnames = seqnames[1], start = end[-.N] + 1L, end = start[-1] - 1L,
+                       strand = strand[1], n_ex = n_ex[1], idx = seq_len(.N - 1)), by = tx]
+intr <- intr[end >= start]
+intr[, rank := fifelse(strand == "-", n_ex - idx, idx)]
+
+# Ranks 1-5, then "6+"; the final element of each transcript is pulled out as "last"
+# (except a lone intron, which stays rank 1).
+rank_meth <- function(dt, what) {
+  n_el  <- if (what == "exon") dt$n_ex else dt$n_ex - 1L
+  label <- fifelse(dt$rank == n_el & dt$rank > 1, "last", as.character(pmin(dt$rank, 6)))
+  gr <- makeGRangesFromDataFrame(dt, seqinfo = si)
+  h  <- findOverlaps(cpg, gr, ignore.strand = TRUE)
+  data.table(rank_label = label[subjectHits(h)],
+             meth = cpg$meth[queryHits(h)], cov = cpg$cov[queryHits(h)]
+             )[, .(meth_pct = 100 * sum(meth) / sum(cov), n_cpg = .N), by = rank_label
+             ][, element := what][]
+}
+
+rank_tab <- rbind(rank_meth(ex[n_ex > 1], "exon"), rank_meth(intr, "intron")) %>%
+  mutate(rank_label = factor(recode(rank_label, `6` = "6+"),
+                             c(as.character(1:5), "6+", "last")))
+write_tsv(rank_tab, file.path(out_dir, "exon_intron_rank_methylation.tsv"))
+
+ggplot(rank_tab, aes(rank_label, meth_pct, colour = element, group = element)) +
+  geom_point(size = 2) + geom_line() +
+  labs(x = "Rank from 5' end", y = "CpG methylation (%)", colour = NULL,
+       subtitle = "Multi-exon genes; 'last' = final exon / intron") + theme_bw()
+```
+
+## Variability among oysters
+
+Per-oyster gene-body methylation (reads summed over each gene) for genes with
+≥ `r min_gene_calls` calls in every oyster. In bivalves, heavily methylated genes
+tend to be the most stable among individuals.
+
+```{r gene-variability}
+gene_ind <- ps_gene[cov >= min_gene_calls & n_cpg >= min_gene_cpgs]
+gene_ind <- gene_ind[, if (.N == nrow(samples)) .SD, by = gene_id]
+gene_ind[, pct := 100 * meth / cov]
+
+gene_var <- gene_ind[, .(mean_pct = mean(pct), sd_pct = sd(pct)), by = gene_id] %>%
+  as_tibble() %>%
+  left_join(select(gene_meth, gene_id, body_class), by = "gene_id")
+write_tsv(gene_var, file.path(out_dir, "gene_methylation_variability.tsv"))
+message(nrow(gene_var), " genes with per-oyster estimates in all ", nrow(samples), " oysters")
+
+ggplot(gene_var, aes(mean_pct, sd_pct)) +
+  geom_bin2d(bins = 60) + geom_smooth(method = "loess", colour = "red") +
+  labs(x = "Mean gene-body methylation across oysters (%)",
+       y = "SD among oysters (% points)") + theme_bw()
+
+# Between-oyster agreement in gene-body methylation (pairwise Spearman).
+pm_gene <- dcast(gene_ind, gene_id ~ sample, value.var = "pct")
+cc <- cor(as.matrix(pm_gene[, -1]), method = "spearman")
+summary(cc[upper.tri(cc)])
+```
+
+# Methylation and gene function
+
+Functional annotation from `13.5` (DIAMOND blastp of GN proteins vs Swiss-Prot,
+E ≤ 1e-8, GO from the best hit). GO terms are the direct UniProt annotations, not
+propagated to parent terms, so broad terms are under-counted; treat the term tests
+as descriptive.
+
+```{r load-annotation}
+annot <- read_tsv(annot_file, show_col_types = FALSE,
+                  col_types = cols(.default = col_character()))
+
+gene_fun <- gene_meth %>%
+  left_join(select(annot, gene_id, accession, protein_name, go_bp), by = "gene_id") %>%
+  mutate(annotation = case_when(is.na(accession) ~ "no Swiss-Prot hit",
+                                is.na(go_bp)     ~ "hit, no GO BP",
+                                TRUE             ~ "hit with GO BP"),
+         annotation = factor(annotation, c("hit with GO BP", "hit, no GO BP",
+                                           "no Swiss-Prot hit")))
+write_tsv(gene_fun, file.path(out_dir, "gene_methylation_annotated.tsv"))
+```
+
+## Annotated vs unannotated genes
+
+Genes with a Swiss-Prot hit are mostly conserved; unannotated genes are enriched for
+lineage-specific and mis-predicted genes. Conserved genes are expected to carry more
+gene-body methylation.
+
+```{r annotation-status}
+gf <- filter(gene_fun, !is.na(body_class))
+
+gf %>% count(annotation, body_class) %>%
+  group_by(annotation) %>% mutate(pct = 100 * n / sum(n)) %>% ungroup()
+chisq.test(table(gf$annotation, gf$body_class))
+
+ggplot(gf, aes(annotation, body_pct, fill = annotation)) +
+  geom_violin(scale = "width") + geom_boxplot(width = 0.1, outlier.shape = NA, fill = "white") +
+  labs(x = NULL, y = "Gene-body methylation (%)") + theme_bw() +
+  theme(legend.position = "none")
+```
+
+## GO term tests
+
+Background: genes with a gene-body estimate and ≥ 1 GO BP term. Two tests per term
+(`r min_go_genes`–`r max_go_genes` genes):
+
+- **Wilcoxon rank-sum** of gene-body methylation, term genes vs the rest of the
+  background (a continuous, direction-aware test; `delta_median` > 0 = term genes more
+  methylated).
+- **Fisher** for over-representation among methylated (≥ 50%) and among unmethylated
+  (< 10%) genes.
+
+```{r go-tests}
+go_long <- gf %>%
+  filter(!is.na(go_bp)) %>%
+  select(gene_id, body_pct, body_class, go_bp) %>%
+  separate_rows(go_bp, sep = "; ") %>%
+  mutate(go_id = str_extract(go_bp, "GO:\\d{7}"),
+         term  = str_trim(str_remove(go_bp, "\\s*\\[GO:\\d{7}\\]$"))) %>%
+  filter(!is.na(go_id)) %>%
+  distinct(gene_id, go_id, .keep_all = TRUE)
+
+bg <- distinct(go_long, gene_id, body_pct, body_class)
+is_high <- set_names(bg$body_class == meth_labels[3], bg$gene_id)
+is_low  <- set_names(bg$body_class == meth_labels[1], bg$gene_id)
+
+terms <- go_long %>% count(go_id, term) %>%
+  filter(n >= min_go_genes, n <= max_go_genes)
+
+go_tests <- map_dfr(seq_len(nrow(terms)), function(k) {
+  ids <- go_long$gene_id[go_long$go_id == terms$go_id[k]]
+  in_t <- bg$gene_id %in% ids
+  wt <- wilcox.test(bg$body_pct[in_t], bg$body_pct[!in_t])
+  fisher_p <- function(flag) fisher.test(table(factor(in_t, c(TRUE, FALSE)),
+                                               factor(flag, c(TRUE, FALSE))),
+                                         alternative = "greater")$p.value
+  tibble(go_id = terms$go_id[k], term = terms$term[k], n_genes = sum(in_t),
+         median_meth = median(bg$body_pct[in_t]),
+         delta_median = median(bg$body_pct[in_t]) - median(bg$body_pct[!in_t]),
+         pct_methylated_genes = 100 * mean(is_high[in_t]),
+         wilcox_p = wt$p.value,
+         high_fisher_p = fisher_p(is_high),
+         low_fisher_p  = fisher_p(is_low))
+}) %>%
+  mutate(across(ends_with("_p"), ~ p.adjust(.x, "BH"), .names = "{.col}_adj")) %>%
+  arrange(wilcox_p)
+
+write_tsv(go_tests, file.path(out_dir, "GO_BP_methylation_tests.tsv"))
+message(nrow(bg), " background genes; ", nrow(terms), " GO BP terms tested; overall ",
+        round(100 * mean(is_high), 1), "% of background genes methylated")
+
+go_tests %>% filter(wilcox_p_adj < 0.05) %>% count(direction = sign(delta_median))
+```
+
+```{r go-plot, fig.height=8, fig.width=9}
+top_go <- go_tests %>%
+  filter(wilcox_p_adj < 0.05) %>%
+  group_by(direction = if_else(delta_median > 0, "higher methylation", "lower methylation")) %>%
+  slice_min(wilcox_p, n = 15, with_ties = FALSE) %>% ungroup()
+
+if (nrow(top_go) > 0) {
+  top_go %>%
+    mutate(term = fct_reorder(str_trunc(term, 60), median_meth)) %>%
+    ggplot(aes(median_meth, term, size = n_genes, colour = -log10(wilcox_p_adj))) +
+    geom_point() +
+    geom_vline(xintercept = median(bg$body_pct), linetype = 2) +
+    facet_grid(direction ~ ., scales = "free_y", space = "free_y") +
+    scale_colour_viridis_c() +
+    labs(x = "Median gene-body methylation of term genes (%)", y = NULL,
+         subtitle = "Dashed line: background median") + theme_bw()
+}
+```
+
+## Broad functional groups
+
+A coarse view, grouping genes by keywords in their GO BP term names. The groups
+follow the housekeeping-vs-inducible contrast often reported for bivalve gene-body
+methylation (constitutively expressed, housekeeping functions methylated;
+environmentally responsive functions less so). Genes can fall into more than one
+group; edit the patterns to suit.
+
+```{r functional-groups, fig.height=5}
+func_groups <- c(
+  "Translation / ribosome"        = "translation|ribosom|rRNA processing",
+  "RNA processing / splicing"     = "mRNA processing|RNA splicing|spliceosom",
+  "DNA replication / repair"      = "DNA replication|DNA repair",
+  "Cell cycle"                    = "cell cycle|cell division|mitotic",
+  "Mitochondria / energy"         = "mitochondri|electron transport|tricarboxylic|ATP synthesis",
+  "Protein degradation"           = "ubiquitin|proteasom|protein catabolic",
+  "Signal transduction"           = "signal transduction|signaling pathway|G protein-coupled",
+  "Immune / defense"              = "immune|defense response|inflammatory|innate",
+  "Stress response"               = "response to stress|oxidative stress|heat|hypoxia|unfolded protein",
+  "Development / differentiation" = "development|morphogenesis|differentiation")
+
+group_meth <- imap_dfr(func_groups, function(pat, grp) {
+  go_long %>% filter(str_detect(term, regex(pat, ignore_case = TRUE))) %>%
+    distinct(gene_id, body_pct) %>% mutate(group = grp)
+})
+
+group_stats <- group_meth %>%
+  group_by(group) %>%
+  summarise(n_genes = n(), median_meth = median(body_pct),
+            pct_methylated_genes = 100 * mean(body_pct >= 50),
+            wilcox_p = wilcox.test(body_pct, bg$body_pct[!bg$gene_id %in% gene_id])$p.value) %>%
+  mutate(wilcox_p_adj = p.adjust(wilcox_p, "BH")) %>%
+  arrange(dplyr::desc(median_meth))
+write_tsv(group_stats, file.path(out_dir, "functional_group_methylation.tsv"))
+group_stats
+
+group_meth %>%
+  mutate(group = factor(group, group_stats$group)) %>%
+  ggplot(aes(body_pct, group)) +
+  geom_boxplot(outlier.size = 0.3) +
+  geom_vline(xintercept = median(bg$body_pct), linetype = 2) +
+  labs(x = "Gene-body methylation (%)", y = NULL,
+       subtitle = "Dashed line: median of all genes with GO BP") + theme_bw()
+```
+
+# Summary
+
+```{r summary}
+summary_tab <- tribble(
+  ~metric, ~value,
+  "CpGs in assembly",                         length(genome_cpg),
+  "CpGs passing pooled filters",              length(cpg),
+  "mean global CpG methylation, per oyster (%)", mean(global$global_meth_pct),
+  "methylated CpGs (>=50%, pooled) (%)",      100 * mean(cpg$pct >= 50),
+  "genes with gene-body estimate",            nrow(gbm),
+  "methylated genes (>=50%) (%)",             100 * mean(gbm$body_class == meth_labels[3]),
+  "unmethylated genes (<10%) (%)",            100 * mean(gbm$body_class == meth_labels[1]),
+  "rho gene methylation vs CpG O/E",          cor(gbm$body_pct, gbm$cpg_oe, method = "spearman",
+                                                  use = "complete.obs"),
+  "rho window methylation vs gene coverage",  cor(windows$meth_pct, windows$gene_frac,
+                                                  method = "spearman"),
+  "GO BP terms tested",                       nrow(go_tests),
+  "GO BP terms, Wilcoxon FDR < 0.05",         sum(go_tests$wilcox_p_adj < 0.05)
+) %>% mutate(value = signif(value, 4))
+write_tsv(summary_tab, file.path(out_dir, "landscape_summary.tsv"))
+summary_tab
+```
+
+# Next steps
+
+- **Repeats / TEs.** 69% of the assembly is repeat. Run RepeatMasker (or EDTA) on
+  `merged_out.fasta`, set `repeat_gff`, and the repeat chunk will split each feature
+  into repeat vs non-repeat; intronic TEs are a common source of gene-body
+  methylation.
+- **Expression.** The classic test of the gene-body model is methylation vs
+  expression level and breadth. Join `gene_methylation.tsv` to per-gene expression
+  from `09` (mean and CV of normalized counts across the 12 RNA-seq oysters) on GN
+  gene ID. These are different animals from the WGBS oysters, so this is a
+  gene-level, not individual-level, comparison.
+- **GO propagation.** With `GO.db` (or `topGO`), propagate annotations to ancestors
+  before the term tests; that will mainly add power to the broad terms.
+- **SNP filter.** C/T SNPs at CpGs read as unmethylated. For the landscape this
+  mainly lowers the methylated fraction slightly; it matters more for `13.4`.
+
+```{r session}
+sessionInfo()
+```
