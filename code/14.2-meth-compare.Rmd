@@ -96,13 +96,14 @@ if (nrow(missing) > 0) {
 }
 
 has_meth <- set_names(sp_keys %in% samples$species, sp_keys)
-if (!any(has_meth)) stop("No CpG files found for either species - run 13 first.")
+if (!any(has_meth)) message("No CpG files for either species: running CpG o/e sections only.")
 samples %>% count(species, assay, group)
 has_meth
 ```
 
 `has_meth` controls which sections run per species: a species without CpG files is
-still carried through the CpG o/e and ortholog sections.
+still carried through the CpG o/e and ortholog sections. With no CpG files at all,
+the measured-methylation sections are skipped.
 
 # Genome annotation
 
@@ -213,7 +214,7 @@ pooled species-level methylome. Pooling is appropriate for the between-species
 question: individual variation within a species is far smaller than the divergence
 being compared here, and pooling recovers sites that no single low-depth oyster covers.
 
-```{r read-cpg}
+```{r read-cpg, eval = any(has_meth)}
 read_cov <- function(f) {
   fread(f, header = FALSE, select = c(1, 2, 5, 6),
         col.names = c("chr", "start", "nC", "nT"))
@@ -248,7 +249,7 @@ ggplot(per_sample, aes(species, global_meth_pct, colour = group)) +
   theme_bw()
 ```
 
-```{r pooled-cpgs}
+```{r pooled-cpgs, eval = any(has_meth)}
 cpg_gr <- map(pooled, function(p) {
   GRanges(p$chr, IRanges(p$start, width = 1),
           nC = p$nC, nT = p$nT, pct = 100 * p$nC / (p$nC + p$nT))
@@ -292,7 +293,7 @@ cpg_tbl %>%
 
 ## Distribution
 
-```{r cpg-distribution}
+```{r cpg-distribution, eval = any(has_meth)}
 ggplot(cpg_tbl, aes(pct, after_stat(density), fill = species)) +
   geom_histogram(binwidth = 5, boundary = 0, position = "identity", alpha = 0.5) +
   labs(x = "% methylation per CpG (pooled)") + theme_bw()
@@ -303,7 +304,7 @@ ggplot(cpg_tbl, aes(pct, after_stat(density), fill = species)) +
 Where is methylation concentrated? Bivalves typically methylate gene bodies
 (exons and introns) and leave promoters and intergenic DNA largely unmethylated.
 
-```{r features-meth}
+```{r features-meth, eval = any(has_meth)}
 feature_summary <- cpg_tbl %>%
   group_by(species, feature) %>%
   summarise(cpgs = n(), mean_pct = mean(pct),
@@ -331,7 +332,7 @@ oysters). Genes are split into methylated and unmethylated classes with a
 two-group k-means on logit(gbM), separately per species, so the boundary adapts to
 each assay rather than using one fixed cut-off.
 
-```{r gene-body}
+```{r gene-body, eval = any(has_meth)}
 gene_meth <- imap_dfr(cpg_gr, function(gr, sp) {
   ov <- findOverlaps(gr, annot[[sp]]$genes, ignore.strand = TRUE)
   tibble(gene_id = names(annot[[sp]]$genes)[subjectHits(ov)],
@@ -375,7 +376,7 @@ Within each species, methylated genes should be CpG-depleted. A clear negative
 relationship checks the data and justifies using CpG o/e as a proxy for the
 species that lacks methylation calls.
 
-```{r gbm-vs-oe}
+```{r gbm-vs-oe, eval = any(has_meth)}
 gbm_oe <- inner_join(gene_meth, gene_oe, by = c("species", "gene_id"))
 
 gbm_oe %>%
@@ -417,9 +418,12 @@ wide <- function(tbl, cols) {
     left_join(per_sp[[2]], by = gene_cols[2])
 }
 
-orth <- wide(gene_oe, c("oe_gene", "oe_exon")) %>%
-  left_join(wide(gene_meth, c("n_cpg", "gbm_pct", "class")) %>%
-              select(-pident), by = gene_cols)
+orth <- wide(gene_oe, c("oe_gene", "oe_exon"))
+if (any(has_meth)) {
+  orth <- orth %>%
+    left_join(wide(gene_meth, c("n_cpg", "gbm_pct", "class")) %>%
+                select(-pident), by = gene_cols)
+}
 write_tsv(orth, file.path(out_dir, "ortholog_methylation.tsv"))
 ```
 
