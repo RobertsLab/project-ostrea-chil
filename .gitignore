@@ -10,3 +10,11 @@ blastdb
 
 
 project-ostrea-chil.Rproj
+
+# 13-wgbs: genome/bisulfite index and large per-sample intermediates
+data/13-wgbs-genome/
+output/13-wgbs/trimmed/
+output/13-wgbs/bismark/
+output/13-wgbs/dedup/
+output/13-wgbs/methylation/
+output/13-wgbs/methylkit_db/
