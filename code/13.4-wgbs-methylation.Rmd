@@ -1,0 +1,396 @@
+---
+title: "13.4 - WGBS DNA methylation across three populations"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+date: "2026-10-08"
+---
+
+Population differences in CpG methylation in *Ostrea chilensis*, from whole-genome
+bisulfite sequencing of 15 oysters (5 each from Pumalin, Quilhua, and Rio Pudeto).
+
+**Upstream:** `code/13-wgbs-submit.sh` (13.1 genome prep → 13.2 trim/align/extract
+→ 13.3 QC summary) must be finished. This notebook reads the strand-merged CpG
+files `output/13-wgbs/methylation/*.CpG_report.merged_CpG_evidence.cov.gz`.
+
+**Reference:** `merged_out.fasta` + `GN.gene.gff3`, the same as the current RNA-seq
+pipeline (`09`), so differentially methylated genes and DE genes share IDs.
+
+**Where to run:** on a compute node inside the lab R container, e.g.
+
+```
+salloc -A srlab -p cpu-g2-mem2x -c 16 --mem=150G -t 12:00:00
+apptainer exec /gscratch/srlab/containers/srlab-R4.4-bioinformatics-container-c3d3116.sif R
+```
+
+Paths are relative to `code/`, like the other notebooks.
+
+**Depth caveat.** At ~23-38 M read pairs per sample, raw coverage of the 1.18 Gb
+genome is only ~6-9x before mapping and deduplication. Single-CpG tests will
+therefore be underpowered and cover a fraction of sites. The analysis is layered
+so that the region (tile) and gene-body levels, which pool CpGs, carry most of the
+inference; treat single-CpG results as supporting.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 8, fig.height = 5)
+```
+
+```{r packages}
+library(methylKit)
+library(GenomicRanges)
+library(rtracklayer)
+library(limma)
+library(pheatmap)
+library(tidyverse)
+```
+
+```{r parameters}
+out_dir   <- "../output/13-wgbs/13.4-methylation"
+meth_dir  <- "../output/13-wgbs/methylation"
+genome_dir <- "../data/13-wgbs-genome"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+min_cov        <- 5      # per-CpG minimum (strand-merged); 10 is typical but costs most sites here
+max_cov_pctl   <- 99.9   # drop PCR/repeat pile-ups
+min_per_group  <- 4L     # CpG must pass in >= 4 of 5 oysters in every population
+tile_size      <- 1000   # bp, non-overlapping windows for DMRs
+tile_min_cpgs  <- 5      # CpGs required per tile per sample
+min_gene_cpgs  <- 5      # CpGs required per gene for gene-body methylation
+diff_cutoff    <- 20     # % methylation difference for DML/DMR calls
+q_cutoff       <- 0.01
+cores          <- 8
+```
+
+# Samples
+
+Groups come from the explicit table `data/13-wgbs-samples.tsv`, never from file
+order, so a re-sorted directory can't silently swap populations.
+
+```{r samples}
+samples <- read_tsv("../data/13-wgbs-samples.tsv", show_col_types = FALSE) %>%
+  mutate(population = factor(population, levels = c("Pum", "Qui", "Rio")),
+         treatment  = as.integer(population) - 1L,          # 0/1/2 for methylKit
+         file       = file.path(meth_dir,
+                                paste0(sample, ".CpG_report.merged_CpG_evidence.cov.gz")))
+
+stopifnot(all(file.exists(samples$file)))
+samples %>% select(sample, population, site)
+```
+
+# Alignment QC
+
+From 13.3. CHH methylation is the conversion check: invertebrate non-CpG
+methylation is near zero, so CHH % ≈ 100 − conversion efficiency. Flag any sample
+above ~1%.
+
+```{r align-qc}
+aln <- read_tsv("../output/13-wgbs/alignment_summary.tsv", show_col_types = FALSE) %>%
+  left_join(select(samples, sample, population), by = "sample")
+aln
+
+aln %>%
+  pivot_longer(c(mapping_pct, dup_pct, CpG_meth_pct, CHH_meth_pct)) %>%
+  ggplot(aes(sample, value, fill = population)) +
+  geom_col() +
+  facet_wrap(~name, scales = "free_y") +
+  theme_bw() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+```
+
+# Read CpG calls
+
+`bismarkCoverage` format: chr, start, end, % methylation, count methylated,
+count unmethylated (1-based). Strands are already merged, so no `destrand` later.
+
+```{r read}
+meth_raw <- methRead(
+  location  = as.list(samples$file),
+  sample.id = as.list(samples$sample),
+  treatment = samples$treatment,
+  assembly  = "Och_merged_out",
+  pipeline  = "bismarkCoverage",
+  context   = "CpG",
+  mincov    = 1
+)
+```
+
+```{r coverage-stats, fig.height=8}
+# Coverage distribution per sample, before filtering.
+cov_summary <- map_dfr(seq_along(meth_raw), function(i) {
+  d <- getData(meth_raw[[i]])
+  tibble(sample   = samples$sample[i],
+         cpgs_1x  = nrow(d),
+         cpgs_5x  = sum(d$coverage >= 5),
+         cpgs_10x = sum(d$coverage >= 10),
+         median_cov = median(d$coverage),
+         # coverage-weighted global CpG methylation
+         global_meth_pct = 100 * sum(d$numCs) / sum(d$coverage))
+})
+write_tsv(cov_summary, file.path(out_dir, "cpg_coverage_summary.tsv"))
+cov_summary
+
+ggplot(left_join(cov_summary, samples, by = "sample"),
+       aes(population, global_meth_pct, colour = population)) +
+  geom_jitter(width = 0.1, size = 3) +
+  labs(y = "Global CpG methylation (%)", title = "Global methylation by population") +
+  theme_bw()
+```
+
+# Filter, normalize, unite
+
+```{r filter-unite}
+meth_filt <- filterByCoverage(meth_raw, lo.count = min_cov, hi.perc = max_cov_pctl)
+meth_norm <- normalizeCoverage(meth_filt, method = "median")
+
+meth_unite <- unite(meth_norm, destrand = FALSE,
+                    min.per.group = min_per_group, mc.cores = cores)
+message(nrow(meth_unite), " CpGs pass in >= ", min_per_group, "/5 oysters per population")
+
+pm <- percMethylation(meth_unite)          # CpG x sample, NAs where a sample was filtered
+```
+
+## Distribution
+
+Invertebrate methylomes are typically mosaic/bimodal: most CpGs near 0% or near 100%,
+with methylation concentrated in gene bodies.
+
+```{r distribution}
+as_tibble(pm) %>%
+  pivot_longer(everything(), names_to = "sample", values_to = "pct") %>%
+  filter(!is.na(pct)) %>%
+  left_join(samples, by = "sample") %>%
+  ggplot(aes(pct, colour = population, group = sample)) +
+  geom_density() +
+  labs(x = "% methylation per CpG") + theme_bw()
+```
+
+## Sample structure
+
+PCA on CpGs covered in all 15 samples, using the most variable sites.
+
+```{r pca}
+pm_complete <- pm[complete.cases(pm), ]
+top <- head(order(apply(pm_complete, 1, var), decreasing = TRUE), 50000)
+pca <- prcomp(t(pm_complete[top, ]))
+ve  <- round(100 * pca$sdev^2 / sum(pca$sdev^2), 1)
+
+as_tibble(pca$x[, 1:3], rownames = "sample") %>%
+  left_join(samples, by = "sample") %>%
+  ggplot(aes(PC1, PC2, colour = population, label = sample)) +
+  geom_point(size = 3) + geom_text(vjust = -0.8, size = 3, show.legend = FALSE) +
+  labs(x = paste0("PC1 (", ve[1], "%)"), y = paste0("PC2 (", ve[2], "%)"),
+       subtitle = paste(nrow(pm_complete), "complete CpGs; top", length(top), "by variance")) +
+  theme_bw()
+
+pheatmap(cor(pm_complete[top, ], method = "spearman"),
+         annotation_col = data.frame(population = samples$population,
+                                     row.names = samples$sample),
+         main = "Spearman correlation, top variable CpGs")
+```
+
+# Genomic features
+
+Annotation is built directly from `GN.gene.gff3`. Each CpG is assigned to one feature
+by priority exon > intron > promoter (2 kb upstream of a gene) > intergenic.
+
+```{r features}
+seqlens <- read_tsv(file.path(genome_dir, "genome.chrom.sizes"),
+                    col_names = c("chr", "len"), show_col_types = FALSE)
+si <- Seqinfo(seqlens$chr, seqlens$len)
+
+gff   <- import(file.path(genome_dir, "GN.gene.gff3"))
+seqlevels(gff, pruning.mode = "coarse") <- seqlevels(si)   # align to FASTA order
+seqinfo(gff) <- si                                            # lengths needed for trim()/gaps()
+
+genes <- gff[gff$type == "gene"]
+names(genes) <- genes$ID
+exons     <- reduce(gff[gff$type == "exon"], ignore.strand = TRUE)
+introns   <- setdiff(reduce(genes, ignore.strand = TRUE), exons)
+promoters <- setdiff(reduce(trim(promoters(genes, upstream = 2000, downstream = 0)),
+                            ignore.strand = TRUE),
+                     reduce(genes, ignore.strand = TRUE))
+intergenic <- gaps(reduce(c(granges(genes), granges(promoters)), ignore.strand = TRUE))
+intergenic <- intergenic[strand(intergenic) == "*"]
+
+feature_sets <- list(exon = exons, intron = introns,
+                     promoter = promoters, intergenic = intergenic)
+
+annotate_feature <- function(gr) {
+  out <- rep(NA_character_, length(gr))
+  for (f in names(feature_sets)) {
+    hit <- is.na(out) & overlapsAny(gr, feature_sets[[f]], ignore.strand = TRUE)
+    out[hit] <- f
+  }
+  factor(out, levels = names(feature_sets))
+}
+
+cpg_gr <- as(meth_unite, "GRanges")
+cpg_gr$feature <- annotate_feature(cpg_gr)
+cpg_gr$mean_meth <- rowMeans(pm, na.rm = TRUE)
+
+as_tibble(mcols(cpg_gr)) %>%
+  ggplot(aes(feature, mean_meth)) +
+  geom_violin(fill = "grey80") +
+  stat_summary(fun = mean, geom = "point", colour = "red") +
+  labs(y = "Mean % methylation across samples") + theme_bw()
+
+table(cpg_gr$feature)
+```
+
+# Differential methylation
+
+All three pairwise contrasts, matching the RNA-seq convention (`Pum_vs_Qui`,
+`Pum_vs_Rio`, `Qui_vs_Rio`). Positive `meth.diff` = higher in the second population.
+
+```{r contrasts}
+contrasts <- list(Pum_vs_Qui = c("Pum", "Qui"),
+                  Pum_vs_Rio = c("Pum", "Rio"),
+                  Qui_vs_Rio = c("Qui", "Rio"))
+
+# methylKit's binomial test with overdispersion correction, on a 2-population subset.
+run_pair <- function(obj, groups) {
+  keep <- samples %>% filter(population %in% groups)
+  sub  <- reorganize(obj,
+                     sample.ids = keep$sample,
+                     treatment  = as.integer(keep$population == groups[2]))
+  calculateDiffMeth(sub, overdispersion = "MN", test = "Chisq", mc.cores = cores)
+}
+
+write_hits <- function(diff, name, level) {
+  hits <- getMethylDiff(diff, difference = diff_cutoff, qvalue = q_cutoff, type = "all")
+  gr   <- as(hits, "GRanges")
+  gr$feature <- annotate_feature(gr)
+  write_tsv(as_tibble(as.data.frame(gr)),
+            file.path(out_dir, paste0(level, "_", name, ".tsv")))
+  export.bed(gr, file.path(out_dir, paste0(level, "_", name, ".bed")))
+  gr
+}
+```
+
+## Single CpGs (DMLs)
+
+```{r dml}
+dml <- imap(contrasts, function(g, name) {
+  d <- run_pair(meth_unite, g)
+  write_hits(d, name, "DML")
+})
+map_int(dml, length)
+```
+
+## 1 kb tiles (DMRs)
+
+Tiling pools reads across neighbouring CpGs, which is the better-powered test at
+this depth.
+
+```{r dmr}
+tiles <- tileMethylCounts(meth_norm, win.size = tile_size, step.size = tile_size,
+                          cov.bases = tile_min_cpgs, mc.cores = cores)
+tiles_unite <- unite(tiles, destrand = FALSE, min.per.group = min_per_group,
+                     mc.cores = cores)
+message(nrow(tiles_unite), " tiles tested")
+
+dmr <- imap(contrasts, function(g, name) {
+  d <- run_pair(tiles_unite, g)
+  write_hits(d, name, "DMR")
+})
+
+dmr_summary <- imap_dfr(dmr, ~ tibble(contrast = .y,
+                                      n_dmr = length(.x),
+                                      hyper = sum(.x$meth.diff > 0),
+                                      hypo  = sum(.x$meth.diff < 0))) %>%
+  left_join(imap_dfr(dmr, ~ as_tibble(table(.x$feature)) %>%
+                       mutate(contrast = .y)) %>%
+              pivot_wider(names_from = Var1, values_from = n),
+            by = "contrast")
+write_tsv(dmr_summary, file.path(out_dir, "DMR_summary.tsv"))
+dmr_summary
+```
+
+# Gene-body methylation
+
+Per gene and oyster: methylated / total calls summed over all CpGs in the gene
+(a coverage-weighted mean). Genes need at least `min_gene_cpgs` CpGs with data
+in every sample. Tested with limma on M-values (logit), the same framework and
+contrasts as the RNA-seq DE in `09`, so results can be joined on gene ID.
+
+```{r gene-body}
+cov_mat <- as.matrix(getData(meth_unite)[, meth_unite@coverage.index])
+cs_mat  <- as.matrix(getData(meth_unite)[, meth_unite@numCs.index])
+colnames(cov_mat) <- colnames(cs_mat) <- meth_unite@sample.ids
+cov_mat[is.na(cov_mat)] <- 0
+cs_mat[is.na(cs_mat)]   <- 0
+
+ov <- findOverlaps(cpg_gr, genes, ignore.strand = TRUE)
+gene_id <- names(genes)[subjectHits(ov)]
+
+sum_by_gene <- function(m) rowsum(m[queryHits(ov), , drop = FALSE], gene_id)
+gene_cov <- sum_by_gene(cov_mat)
+gene_cs  <- sum_by_gene(cs_mat)
+gene_ncpg <- sum_by_gene((cov_mat > 0) * 1)
+
+keep <- apply(gene_ncpg, 1, min) >= min_gene_cpgs
+gene_frac <- (gene_cs[keep, ] + 0.5) / (gene_cov[keep, ] + 1)   # offset avoids logit(0/1)
+gene_M    <- log2(gene_frac / (1 - gene_frac))
+message(sum(keep), " genes with >= ", min_gene_cpgs, " covered CpGs in every oyster")
+
+write_tsv(as_tibble(100 * gene_frac, rownames = "gene_id"),
+          file.path(out_dir, "gene_body_methylation_pct.tsv"))
+
+# Gene-body methylation is typically bimodal in bivalves (methylated vs unmethylated genes).
+tibble(mean_pct = rowMeans(100 * gene_frac)) %>%
+  ggplot(aes(mean_pct)) + geom_histogram(bins = 50) +
+  labs(x = "Mean gene-body methylation (%)", y = "Genes") + theme_bw()
+```
+
+```{r gene-body-limma}
+group  <- samples$population[match(colnames(gene_M), samples$sample)]
+design <- model.matrix(~ 0 + group); colnames(design) <- levels(group)
+cm <- makeContrasts(Pum_vs_Qui = Qui - Pum,
+                    Pum_vs_Rio = Rio - Pum,
+                    Qui_vs_Rio = Rio - Qui,
+                    levels = design)
+
+fit <- eBayes(contrasts.fit(lmFit(gene_M, design), cm), trend = TRUE)
+
+# Omnibus: any difference among the three populations.
+any_pop <- topTable(fit, number = Inf, sort.by = "F") %>%
+  as_tibble(rownames = "gene_id")
+write_tsv(any_pop, file.path(out_dir, "DMG_any_population_F.tsv"))
+
+dmg <- map(colnames(cm), function(cn) {
+  tt <- topTable(fit, coef = cn, number = Inf) %>% as_tibble(rownames = "gene_id")
+  # logFC here is a difference in M-values; also report it in % methylation.
+  tt <- tt %>% mutate(delta_pct = 100 * (rowMeans(gene_frac[gene_id, group == sub(".*_vs_", "", cn)]) -
+                                         rowMeans(gene_frac[gene_id, group == sub("_vs_.*", "", cn)])))
+  write_tsv(tt, file.path(out_dir, paste0("DMG_", cn, ".tsv")))
+  filter(tt, adj.P.Val < 0.05, abs(delta_pct) >= 10)
+}) %>% set_names(colnames(cm))
+
+map_int(dmg, nrow)
+
+sig <- any_pop %>% filter(adj.P.Val < 0.05) %>% pull(gene_id)
+if (length(sig) >= 2) {
+  pheatmap(100 * gene_frac[head(sig, 100), ],
+           scale = "row", show_rownames = length(sig) <= 50,
+           annotation_col = data.frame(population = group, row.names = colnames(gene_M)),
+           main = "Top differentially methylated genes (F-test)")
+}
+```
+
+# Next steps
+
+- **Expression link:** join `DMG_*.tsv` to the `09` limma tables on `gene_id`
+  (GN gene IDs; the `09` StringTie gene IDs map to these via the reference-guided
+  merge) and test whether gene-body methylation level or change predicts expression.
+  Note the RNA-seq oysters are different individuals from the WGBS oysters, so this
+  is a population-level, not individual-level, comparison.
+- **Genetic confounding:** C→T SNPs read as unmethylated CpGs. Population-specific
+  SNPs can create apparent DMLs. If many DMLs are near 0 vs 100%, call SNPs from
+  the bisulfite BAMs (e.g. BS-SNPer / Biscuit) and drop CpGs overlapping C/T or G/A variants.
+- **Functional enrichment:** GO enrichment of DMGs against the background of all
+  tested genes (`any_pop$gene_id`), using `SPannot-GO.tsv` via the `03` join.
+
+```{r session}
+sessionInfo()
+```
