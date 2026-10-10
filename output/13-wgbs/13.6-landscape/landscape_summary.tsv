@@ -1,0 +1,12 @@
+metric	value
+CpGs in assembly	26100000
+CpGs passing pooled filters	14430000
+mean global CpG methylation, per oyster (%)	20.2
+methylated CpGs (>=50%, pooled) (%)	18.19
+genes with gene-body estimate	13640
+methylated genes (>=50%) (%)	35.46
+unmethylated genes (<10%) (%)	59.4
+rho gene methylation vs CpG O/E	-0.5888
+rho window methylation vs gene coverage	0.3652
+GO BP terms tested	839
+GO BP terms, Wilcoxon FDR < 0.05	321

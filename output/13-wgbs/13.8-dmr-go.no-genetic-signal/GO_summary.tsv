@@ -1,0 +1,4 @@
+set	dmr_genes	dmr_genes_with_go	universe	terms_reported	terms_fdr
+Qui_vs_Rio_all	8	7	6219	2	0
+Qui_vs_Rio_hyper	4	4	6219	0	0
+Qui_vs_Rio_hypo	4	3	6219	0	0

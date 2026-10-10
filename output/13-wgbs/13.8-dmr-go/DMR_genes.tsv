@@ -1,0 +1,57 @@
+contrast	gene_id	dmr	meth_diff	dmr_feature	entry_name	protein_name	evalue
+Qui_vs_Rio	GN003827	Chromosome_1B:132143001-132144000	-86.01557430240105	promoter	KCTD7_MOUSE	BTB/POZ domain-containing protein KCTD7	4.8199999999999994e-34
+Qui_vs_Rio	GN020540	Chromosome_9B:7227001-7228000	-71.97293447293448	exon	NU107_MOUSE	Nuclear pore complex protein Nup107 (107 kDa nucleoporin) (Nucleoporin Nup107)	2.36e-49
+Qui_vs_Rio	GN015239	Chromosome_6A:63175001-63176000	61.32455884154098	exon	NA	NA	NA
+Qui_vs_Rio	GN003810	Chromosome_1B:131462001-131463000	59.53909406814258	exon	CTU2_DANRE	Cytoplasmic tRNA 2-thiolation protein 2	4.209999999999999e-101
+Qui_vs_Rio	GN020540	Chromosome_9B:7220001-7221000	-57.04251700680272	promoter	NU107_MOUSE	Nuclear pore complex protein Nup107 (107 kDa nucleoporin) (Nucleoporin Nup107)	2.36e-49
+Qui_vs_Rio	GN000740	Chromosome_10A:28945001-28946000	-55.469042811717905	intron	NA	NA	NA
+Qui_vs_Rio	GN010445	Chromosome_4A:78726001-78727000	51.021437578814634	exon	NA	NA	NA
+Qui_vs_Rio	GN021273	Chromosome_9B:77280001-77281000	47.06533776301218	intron	NA	NA	NA
+Qui_vs_Rio	GN008799	Chromosome_4A:4400001-4401000	44.47222222222222	promoter	NA	NA	NA
+Qui_vs_Rio	GN018370	Chromosome_6B:117970001-117971000	-44.233214027264374	promoter	PBX4_MOUSE	Pre-B-cell leukemia transcription factor 4 (Homeobox protein PBX4)	4.51e-10
+Qui_vs_Rio	GN020977	Chromosome_9B:52258001-52259000	43.521594684385384	exon	BTBD6_MOUSE	BTB/POZ domain-containing protein 6	2.26e-19
+Qui_vs_Rio	GN003774	Chromosome_1B:130641001-130642000	41.82222222222222	exon	TIP_MOUSE	T-cell immunomodulatory protein (Protein TIP) (Integrin-alpha FG-GAP repeat-containing protein 1) (Linkin)	4.16e-88
+Qui_vs_Rio	GN018727	Chromosome_7B:5837001-5838000	-40.16545826361778	promoter	MGLL_RAT	Monoglyceride lipase (MGL) (EC 3.1.1.23) (Monoacylglycerol lipase) (MAGL)	1.52e-66
+Qui_vs_Rio	GN018728	Chromosome_7B:5837001-5838000	-40.16545826361778	promoter	TSAL_THEMA	L-threonine ammonia-lyase (EC 4.3.1.19) (L-serine ammonia-lyase) (EC 4.3.1.17) (Threonine dehydratase)	2.59e-43
+Qui_vs_Rio	GN020540	Chromosome_9B:7225001-7226000	-39.57184962174271	intron	NU107_MOUSE	Nuclear pore complex protein Nup107 (107 kDa nucleoporin) (Nucleoporin Nup107)	2.36e-49
+Qui_vs_Rio	GN010140	Chromosome_4A:66040001-66041000	39.08807703200227	intron	DEFI8_XENTR	Differentially expressed in FDCP 8 homolog (DEF-8)	3.62e-137
+Qui_vs_Rio	GN008494	Chromosome_2A:91566001-91567000	-35.13861516226515	intron	CD158_MOUSE	Coiled-coil domain-containing protein 158	3.8000000000000005e-21
+Qui_vs_Rio	GN020540	Chromosome_9B:7223001-7224000	-35.026338999842935	intron	NU107_MOUSE	Nuclear pore complex protein Nup107 (107 kDa nucleoporin) (Nucleoporin Nup107)	2.36e-49
+Qui_vs_Rio	GN010993	Chromosome_5B:8100001-8101000	33.45065701260391	exon	LAMA_DROME	Laminin subunit alpha (Laminin A chain)	0
+Qui_vs_Rio	GN020652	Chromosome_9B:18025001-18026000	32.842534350072036	intron	SPEF1_MOUSE	Sperm flagella and cilia-associated protein 1 (Calponin-homology and microtubule-associated protein)	4.7499999999999994e-43
+Qui_vs_Rio	GN020540	Chromosome_9B:7226001-7227000	-31.49232197446768	intron	NU107_MOUSE	Nuclear pore complex protein Nup107 (107 kDa nucleoporin) (Nucleoporin Nup107)	2.36e-49
+Qui_vs_Rio	GN017845	Chromosome_6B:99670001-99671000	31.43330333618848	intron	FNTB_BOVIN	Protein farnesyltransferase subunit beta (FTase-beta) (EC 2.5.1.58) (CAAX farnesyltransferase subunit beta) (Ras proteins prenyltransferase subunit beta)	2.9999999999999993e-176
+Qui_vs_Rio	GN012770	Chromosome_5B:83546001-83547000	30.994500603979912	exon	SAFB2_MOUSE	Scaffold attachment factor B2 (SAF-B2)	5.23e-19
+Qui_vs_Rio	GN003755	Chromosome_1B:129627001-129628000	-30.987394957983188	exon	TYR3_CAEEL	Putative tyrosinase-like protein tyr-3	1.55e-44
+Qui_vs_Rio	GN003756	Chromosome_1B:129627001-129628000	-30.987394957983188	exon	TXIP1_MOUSE	Translin-associated factor X-interacting protein 1 (Trax-interacting protein 1)	2.79e-120
+Qui_vs_Rio	GN020540	Chromosome_9B:7222001-7223000	-30.684808594062083	intron	NU107_MOUSE	Nuclear pore complex protein Nup107 (107 kDa nucleoporin) (Nucleoporin Nup107)	2.36e-49
+Qui_vs_Rio	GN012201	Chromosome_5B:55846001-55847000	30.320164685063656	intron	FERY3_PONAB	FERRY endosomal RAB5 effector complex subunit 3	1.62e-142
+Qui_vs_Rio	GN014063	Chromosome_6A:11027001-11028000	29.52380952380953	intron	SIF1_DROME	Protein still life, isoform SIF type 1	1.6399999999999999e-40
+Qui_vs_Rio	GN020540	Chromosome_9B:7224001-7225000	-28.593905206603782	intron	NU107_MOUSE	Nuclear pore complex protein Nup107 (107 kDa nucleoporin) (Nucleoporin Nup107)	2.36e-49
+Qui_vs_Rio	GN011877	Chromosome_5B:42019001-42020000	-28.27707141537156	promoter	NA	NA	NA
+Qui_vs_Rio	GN006404	Chromosome_2A:7117001-7118000	-27.47354282341064	exon	NA	NA	NA
+Qui_vs_Rio	GN003781	Chromosome_1B:130752001-130753000	27.207558164123625	intron	TPX2_PATPE	Targeting protein for Xklp2 homolog (TPX2 homolog) (Microtubule-associated protein TPX2 homolog)	1.6499999999999997e-95
+Qui_vs_Rio	GN020180	Chromosome_8B:77047001-77048000	-26.12212588588886	promoter	TEX9_HUMAN	Testis-expressed protein 9	6.04e-38
+Qui_vs_Rio	GN014608	Chromosome_6A:34006001-34007000	25.97095833151914	intron	NA	NA	NA
+Qui_vs_Rio	GN020287	Chromosome_8B:89336001-89337000	-25.784113681077653	exon	SC11A_MOUSE	Signal peptidase complex catalytic subunit SEC11A (EC 3.4.21.89) (Endopeptidase SP18) (Microsomal signal peptidase 18 kDa subunit) (SPase 18 kDa subunit) (SEC11 homolog A) (SEC11-like protein 1) (SPC18) (Sid 2895)	5.4999999999999995e-87
+Qui_vs_Rio	GN003780	Chromosome_1B:130722001-130723000	24.612966159978665	exon	RNF31_MOUSE	E3 ubiquitin-protein ligase RNF31 (EC 2.3.2.31) (HOIL-1-interacting protein) (HOIP) (Putative Ariadne-like ubiquitin ligase) (PAUL) (RING finger protein 31) (RING-type E3 ubiquitin transferase RNF31)	2.02e-100
+Qui_vs_Rio	GN018537	Chromosome_6B:124151001-124152000	-24.496644295302012	exon	MMSA_ANOGA	Probable methylmalonate-semialdehyde/malonate-semialdehyde dehydrogenase [acylating], mitochondrial (MMSDH) (EC 1.2.1.27) (Malonate-semialdehyde dehydrogenase [acylating])	5.179999999999999e-222
+Qui_vs_Rio	GN003782	Chromosome_1B:130776001-130777000	24.346642821041176	intron	DRE2_BRAFL	Anamorsin homolog (Fe-S cluster assembly protein DRE2 homolog)	3.4000000000000003e-100
+Qui_vs_Rio	GN007074	Chromosome_2A:33064001-33065000	-23.938414164742102	exon	TLCD5_MOUSE	TLC domain-containing protein 5 (Transmembrane protein 136)	1.7199999999999998e-48
+Qui_vs_Rio	GN003775	Chromosome_1B:130660001-130661000	23.43189964157707	exon	RM03_BOVIN	Large ribosomal subunit protein uL3m (39S ribosomal protein L3, mitochondrial) (L3mt) (MRP-L3)	1.1699999999999999e-54
+Qui_vs_Rio	GN003782	Chromosome_1B:130777001-130778000	22.877026074700492	intron	DRE2_BRAFL	Anamorsin homolog (Fe-S cluster assembly protein DRE2 homolog)	3.4000000000000003e-100
+Qui_vs_Rio	GN020625	Chromosome_9B:15863001-15864000	22.445580419106943	exon	IF4E2_MOUSE	Eukaryotic translation initiation factor 4E type 2 (eIF-4E type 2) (eIF4E type 2) (eIF4E-2) (mRNA cap-binding protein type 2) (Eukaryotic translation initiation factor 4E-like 3) (eIF4E-like protein 4E-LP)	1.5899999999999996e-107
+Qui_vs_Rio	GN009969	Chromosome_4A:58470001-58471000	22.3803335499242	exon	CCD60_RAT	Coiled-coil domain-containing protein 60	9.94e-13
+Qui_vs_Rio	GN011199	Chromosome_5B:17066001-17067000	22.285798663664213	intron	TOE1_HUMAN	Target of EGR1 protein 1	4.569999999999999e-101
+Qui_vs_Rio	GN007260	Chromosome_2A:42123001-42124000	22.2252889425565	exon	NCF2_BOVIN	Neutrophil cytosol factor 2 (NCF-2) (67 kDa neutrophil oxidase factor) (Neutrophil NADPH oxidase factor 2) (p67-phox)	8.31e-16
+Qui_vs_Rio	GN014060	Chromosome_6A:10859001-10860000	22.113199247293437	intron	GLSN_MEDSA	Glutamate synthase [NADH], amyloplastic (EC 1.4.1.14) (NADH-GOGAT)	0
+Qui_vs_Rio	GN010681	Chromosome_4A:89966001-89967000	21.93891464412325	intron	ANKY2_HUMAN	Ankyrin repeat and MYND domain-containing protein 2	1.0999999999999998e-107
+Qui_vs_Rio	GN003778	Chromosome_1B:130689001-130690000	21.75842044134727	exon	COX42_THUOB	Cytochrome c oxidase subunit 4 isoform 2, mitochondrial (Cytochrome c oxidase subunit IV isoform 2) (COX IV-2)	4.63e-16
+Qui_vs_Rio	GN003774	Chromosome_1B:130653001-130654000	21.58176630180559	exon	TIP_MOUSE	T-cell immunomodulatory protein (Protein TIP) (Integrin-alpha FG-GAP repeat-containing protein 1) (Linkin)	4.16e-88
+Qui_vs_Rio	GN003775	Chromosome_1B:130653001-130654000	21.58176630180559	exon	RM03_BOVIN	Large ribosomal subunit protein uL3m (39S ribosomal protein L3, mitochondrial) (L3mt) (MRP-L3)	1.1699999999999999e-54
+Qui_vs_Rio	GN003811	Chromosome_1B:131470001-131471000	21.575984990619133	promoter	NEUL2_MOUSE	Neuralized-like protein 2	2.1199999999999998e-54
+Qui_vs_Rio	GN012616	Chromosome_5B:77423001-77424000	20.82658517952636	intron	TTLL7_HUMAN	Tubulin polyglutamylase TTLL7 (EC 6.3.2.-) (Testis development protein NYD-SP30) (Tubulin--tyrosine ligase-like protein 7)	5.18e-263
+Qui_vs_Rio	GN003787	Chromosome_1B:130914001-130915000	20.684052133514896	exon	ECI2_HUMAN	Enoyl-CoA delta isomerase 2 (EC 5.3.3.8) (DRS-1) (Delta(3),delta(2)-enoyl-CoA isomerase) (D3,D2-enoyl-CoA isomerase) (Diazepam-binding inhibitor-related protein 1) (DBI-related protein 1) (Dodecenoyl-CoA isomerase) (Hepatocellular carcinoma-associated antigen 88) (Peroxisomal 3,2-trans-enoyl-CoA isomerase) (pECI) (Renal carcinoma antigen NY-REN-1)	5.69e-135
+Qui_vs_Rio	GN020788	Chromosome_9B:33211001-33212000	20.393923335099807	promoter	MOT12_MOUSE	Monocarboxylate transporter 12 (MCT 12) (Solute carrier family 16 member 12)	1.4000000000000001e-70
+Qui_vs_Rio	GN010609	Chromosome_4A:86438001-86439000	20.258506990240043	intron	LMF2_XENTR	Lipase maturation factor 2	5.35e-142
+Qui_vs_Rio	GN012742	Chromosome_5B:82508001-82509000	20.249851600021582	intron	HELZ2_HUMAN	3'-5' exoribonuclease HELZ2 (EC 3.1.13.1) (ATP-dependent RNA helicase PRIC285) (EC 5.6.2.6) (Helicase with zinc finger 2, transcriptional coactivator) (Helicase with zinc finger domain 2) (PPAR-alpha-interacting complex protein 285) (PPAR-gamma DNA-binding domain-interacting protein 1) (PDIP1) (PPAR-gamma DBD-interacting protein 1) (Peroxisomal proliferator-activated receptor A-interacting complex 285 kDa protein)	1.86e-278
