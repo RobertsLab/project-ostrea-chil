@@ -1,0 +1,46 @@
+QC (merged -> HapA), mean over oysters:
+  mapping_pct              57.4 ->           67.4
+  multimap_pct             31.9 ->           15.8
+  cpgs_5x           7,862,777.7 ->    9,129,882.7
+
+Shared chromosomes (2A/4A/6A/10A, identical in both):
+  Pum1  CpGs>=5x both 3,457,072  depth ratio 1.063  r 0.9954  mean |diff| 0.71%
+  Qui1  CpGs>=5x both 3,634,727  depth ratio 1.062  r 0.9953  mean |diff| 0.69%
+  Qui2  CpGs>=5x both 3,136,059  depth ratio 1.062  r 0.9953  mean |diff| 0.76%
+  Qui3  CpGs>=5x both 3,663,625  depth ratio 1.062  r 0.9953  mean |diff| 0.72%
+  Qui4  CpGs>=5x both 3,196,595  depth ratio 1.062  r 0.9953  mean |diff| 0.69%
+  Rio1  CpGs>=5x both 3,922,014  depth ratio 1.057  r 0.9954  mean |diff| 0.7%
+  Rio2  CpGs>=5x both 3,321,874  depth ratio 1.06  r 0.9954  mean |diff| 0.69%
+  Rio3  CpGs>=5x both 2,806,089  depth ratio 1.06  r 0.9954  mean |diff| 0.73%
+  Rio4  CpGs>=5x both 3,772,012  depth ratio 1.061  r 0.9954  mean |diff| 0.71%
+
+DMR windows: 304 regions
+  lift to HapA: ok 290, unmapped 11, < 50% of query aligned 3
+  class                          n  both same sign replicated      r
+  no genetic signal             82    80  77 (96%)   75 (94%)   0.94
+  untested                     125   117 114 (97%)  107 (91%)   0.95
+  genetic: CpG-destroying       41    37  26 (70%)   21 (57%)   0.75
+  repeat-like                   36    36  34 (94%)   28 (78%)   0.89
+  genetic: other                20    19 19 (100%)   17 (89%)   0.96
+  (both = measurable on both references; replicated = same sign and |HapA diff| >= 10%)
+
+DML CpGs: 1275 regions
+  lift to HapA: ok 1099, no CpG on HapA 129, unmapped 38, CpG in an indel 9
+  class                          n  both same sign replicated      r
+  no genetic signal            488   461 450 (98%)  425 (92%)   0.97
+  untested                     333   301 296 (98%)  279 (93%)   0.97
+  genetic: CpG-destroying      204   102  93 (91%)   90 (88%)   0.91
+  repeat-like                  149   135 125 (93%)  104 (77%)   0.89
+  genetic: other               101    81  80 (99%)   78 (96%)   0.97
+  (both = measurable on both references; replicated = same sign and |HapA diff| >= 20%)
+
+GN020540 -> Chromosome_9A:61735450-61741949 (-), identity 1.000, query covered 1.00
+  Pum1  merged  36.9% (1555 calls)   HapA  35.2% (1640 calls)
+  Qui1  merged  61.1% (1383 calls)   HapA  61.2% (1416 calls)
+  Qui2  merged  37.1% (1352 calls)   HapA  36.2% (1407 calls)
+  Qui3  merged  35.7% (1802 calls)   HapA  34.3% (1893 calls)
+  Qui4  merged  40.5% (1105 calls)   HapA  39.6% (1135 calls)
+  Rio1  merged   2.7% (1463 calls)   HapA   2.7% (1465 calls)
+  Rio2  merged   2.3% (1237 calls)   HapA   2.7% (1276 calls)
+  Rio3  merged   4.3% ( 986 calls)   HapA   4.5% (1032 calls)
+  Rio4  merged   3.4% (1405 calls)   HapA   3.9% (1449 calls)
