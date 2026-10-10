@@ -4,7 +4,9 @@
 #SBATCH --partition=cpu-g2-mem2x
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=128G
-#SBATCH --time=72:00:00
+#SBATCH --time=8:00:00
+# Samples take 1.5-2.2 h. A short limit matters: SLURM won't start a task whose
+# limit would run into a maintenance reservation, so 72 h held tasks for days.
 #SBATCH --array=1-15%5
 #SBATCH --output=output/13-wgbs/logs/%x_%A_%a.out
 
