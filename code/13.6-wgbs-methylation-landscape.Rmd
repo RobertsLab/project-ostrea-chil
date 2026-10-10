@@ -5,6 +5,8 @@ output:
     toc: true
     toc_float: true
 date: "2026-10-08"
+params:
+  ref: "merged"   # or "hapa": the WGBS_REF=hapa alignment, with 13.11 lifted genes
 ---
 
 General characterization of CpG methylation in *Ostrea chilensis*: how much of the
@@ -22,10 +24,16 @@ notebook describes the shared methylome, pooling the 9 independent oysters in
   `output/13-wgbs/13.5-gene-annotation/GN_gene_annotation.tsv` (Swiss-Prot best hit +
   GO per GN gene). Only the last section needs it.
 
-**Reference:** `merged_out.fasta` + `GN.gene.gff3`, as in `09` and `13.4`. The GFF has
-gene / mRNA / exon / CDS only, with every exon identical to a CDS: there are **no
-UTRs**, so "exon" here means coding exon and 5'/3' UTR methylation can't be separated
-from the flanks.
+**Reference.** Chosen with the `ref` render parameter. `merged` (default) uses
+`merged_out.fasta` + `GN.gene.gff3` and `output/13-wgbs/`. `hapa` uses the
+`WGBS_REF=hapa` alignment to `Och_HapA_assembly.fa` (`output/13-wgbs-hapa/`), with the GN
+gene models lifted onto HapA by `13.11` (same gene IDs, so `13.5` applies) and a HapA
+SNP mask from `13.7` run with `WGBS_REF=hapa`; results go to
+`output/13-wgbs-hapa/13.6-landscape`:
+`rmarkdown::render("13.6-wgbs-methylation-landscape.Rmd", params = list(ref = "hapa"))`.
+Either way the GFF has gene / mRNA / exon / CDS only, with every exon identical to a
+CDS: there are **no UTRs**, so "exon" here means coding exon and 5'/3' UTR methylation
+can't be separated from the flanks.
 
 **Pooling.** At ~6–9x raw coverage per oyster, single-sample per-CpG estimates are
 noisy. For the landscape, counts are summed across all 9 oysters per CpG (a
@@ -60,12 +68,20 @@ library(Rsamtools)
 ```
 
 ```{r parameters}
-out_dir    <- "../output/13-wgbs/13.6-landscape"
-meth_dir   <- "../output/13-wgbs/methylation"
-genome_dir <- "../data/13-wgbs-genome"
+ref <- match.arg(params$ref, c("merged", "hapa"))
+ref_cfg <- list(
+  merged = list(out_root = "../output/13-wgbs", genome_dir = "../data/13-wgbs-genome",
+                fasta = "merged_out.fasta", gff = "GN.gene.gff3"),
+  hapa   = list(out_root = "../output/13-wgbs-hapa", genome_dir = "../data/13-wgbs-genome-hapa",
+                fasta = "Och_HapA_assembly.fa", gff = "GN.gene.hapa.gff3")   # gff from 13.11
+)[[ref]]
+out_root   <- ref_cfg$out_root
+out_dir    <- file.path(out_root, "13.6-landscape")
+meth_dir   <- file.path(out_root, "methylation")
+genome_dir <- ref_cfg$genome_dir
 annot_file <- "../output/13-wgbs/13.5-gene-annotation/GN_gene_annotation.tsv"
 repeat_gff <- NULL   # RepeatMasker/EDTA GFF for this assembly, if one becomes available
-snp_bed    <- "../output/13-wgbs/13.7-snps/wgbs_snps.q20.CpG.bed"   # from 13.7; skipped if absent
+snp_bed    <- file.path(out_root, "13.7-snps/wgbs_snps.q20.CpG.bed")   # from 13.7; skipped if absent
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 # CpG level (pooled across oysters)
@@ -116,9 +132,9 @@ Five non-overlapping compartments, so every base and CpG belongs to exactly one:
 seqlens <- read_tsv(file.path(genome_dir, "genome.chrom.sizes"),
                     col_names = c("chr", "len"), show_col_types = FALSE)
 si <- Seqinfo(seqlens$chr, seqlens$len)
-fa <- FaFile(file.path(genome_dir, "merged_out.fasta"))
+fa <- FaFile(file.path(genome_dir, ref_cfg$fasta))
 
-gff <- import(file.path(genome_dir, "GN.gene.gff3"))
+gff <- import(file.path(genome_dir, ref_cfg$gff))
 seqlevels(gff, pruning.mode = "coarse") <- seqlevels(si)
 seqinfo(gff) <- si
 
@@ -279,7 +295,7 @@ CpG methylation in invertebrates is moderate overall (bivalves typically ~10–2
 CpGs methylated), unlike the ~70–80% of vertebrates.
 
 ```{r global-per-oyster}
-aln <- read_tsv("../output/13-wgbs/alignment_summary.tsv", show_col_types = FALSE)
+aln <- read_tsv(file.path(out_root, "alignment_summary.tsv"), show_col_types = FALSE)
 global <- ps_global %>%
   left_join(select(aln, sample, CHG_meth_pct, CHH_meth_pct), by = "sample") %>%
   select(sample, population, cpgs_1x, cpgs_5x, median_cov,
