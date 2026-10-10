@@ -63,7 +63,9 @@ for r in rows:
         print("\t".join([r[c] for c in rows[0]] + ["NA"] * (len(cols) - len(rows[0]))))
         continue
     diff = [v for v in var if v["pop_differentiated"] == "True"]
-    ctot = [v for v in diff if v["cpg_destroying"] == "True"]
+    # Only inside the target: with a flank, a SNP at a neighbouring CpG doesn't
+    # explain this region's call (it still counts as "genetic: other").
+    ctot = [v for v in diff if v["cpg_destroying"] == "True" and v["in_target"] == "True"]
     mq = list(csv.DictReader(open(f"{wd}/mapq.tsv"), delimiter="\t"))
     reads = sum(int(m["reads"]) for m in mq)
     low = f"{sum(int(m['mapq_lt10']) for m in mq) / reads:.2f}" if reads else ""
