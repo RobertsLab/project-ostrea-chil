@@ -65,6 +65,7 @@ meth_dir   <- "../output/13-wgbs/methylation"
 genome_dir <- "../data/13-wgbs-genome"
 annot_file <- "../output/13-wgbs/13.5-gene-annotation/GN_gene_annotation.tsv"
 repeat_gff <- NULL   # RepeatMasker/EDTA GFF for this assembly, if one becomes available
+snp_bed    <- "../output/13-wgbs/13.7-snps/wgbs_snps.q20.CpG.bed"   # from 13.7; skipped if absent
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 # CpG level (pooled across oysters)
@@ -185,18 +186,37 @@ composition
 Each oyster is read once. Per-oyster summaries (global, per feature, per gene) are
 taken on the way through; per-CpG counts are summed into one pooled table.
 
+**SNP mask.** CpGs carrying a SNP on their C or G (from `13.7`, biscuit genotyping of
+the bisulfite BAMs) are dropped as each oyster is read, since a C→T SNP reads as an
+unmethylated CpG. Every summary below is therefore SNP-masked; assembly CpG counts
+(`genome_cpg`) are not. If the 13.7 file is missing, nothing is masked.
+
 ```{r read}
 read_cov <- function(f) {
   fread(cmd = paste("gzip -dc", shQuote(f)), header = FALSE,
         select = c(1, 2, 5, 6), col.names = c("chr", "pos", "meth", "unmeth"))
 }
 
+snp_gr <- NULL
+if (file.exists(snp_bed)) {
+  snp_gr <- import(snp_bed, format = "bed")   # one base: the C or G hit
+  message(length(snp_gr), " CpG-SNP sites from ", snp_bed)
+} else {
+  message("No SNP mask (", snp_bed, " not found); run code/13.7-wgbs-snps.sh to add one")
+}
+
 pooled <- NULL
 ps_global <- ps_feature <- ps_gene <- vector("list", nrow(samples))
+n_masked <- set_names(integer(nrow(samples)), samples$sample)
 
 for (i in seq_len(nrow(samples))) {
   s <- samples$sample[i]
   d <- read_cov(samples$file[i])[chr %in% seqlevels(si)]
+  if (!is.null(snp_gr)) {                     # each CpG spans its C (pos) and G (pos + 1)
+    hit <- overlapsAny(GRanges(d$chr, IRanges(d$pos, width = 2)), snp_gr, ignore.strand = TRUE)
+    n_masked[s] <- sum(hit)
+    d <- d[!hit]
+  }
   d[, cov := meth + unmeth]
   gr <- GRanges(d$chr, IRanges(d$pos, width = 1), seqinfo = si)
   d[, feature := annotate_feature(gr)]
@@ -221,6 +241,9 @@ for (i in seq_len(nrow(samples))) {
 ps_global  <- rbindlist(ps_global)  %>% left_join(samples, by = "sample")
 ps_feature <- rbindlist(ps_feature) %>% left_join(samples, by = "sample")
 ps_gene    <- rbindlist(ps_gene)
+if (!is.null(snp_gr))
+  write_tsv(tibble(sample = names(n_masked), cpgs_masked = n_masked),
+            file.path(out_dir, "snp_mask_summary.tsv"))
 rm(d, gr, ov); invisible(gc())
 ```
 
