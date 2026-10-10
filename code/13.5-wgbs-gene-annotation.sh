@@ -12,8 +12,9 @@
 # it, so this rebuilds one: GN proteins -> DIAMOND blastp vs Swiss-Prot -> GO terms.
 # Independent of the WGBS alignments; can run any time after 13.1 has staged the GFF.
 #
-# Needs gffread + DIAMOND, which are not in `myflow`. One-time setup:
-#   conda create -n wgbs-annot -c conda-forge -c bioconda diamond gffread
+# Needs gffread + DIAMOND, which are not in `myflow`. One-time setup (samtools is
+# for 14.1, which shares this env):
+#   conda create -n wgbs-annot -c conda-forge -c bioconda diamond gffread samtools
 #
 # Idempotent: skips any step whose output already exists.
 

@@ -1,0 +1,515 @@
+---
+title: "14.2 - DNA methylation: Ostrea chilensis vs Ostrea lurida"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+date: "2026-10-08"
+---
+
+Comparative DNA methylation between the Chilean flat oyster (*O. chilensis*, Och)
+and the Olympia oyster (*O. lurida*, Olur), at three levels:
+
+1. **Methylome landscape** — global CpG methylation, the per-CpG distribution, and
+   how methylation is partitioned among exons, introns, promoters and intergenic DNA.
+2. **Gene-body methylation (gbM)** — per-gene levels and the methylated / unmethylated
+   gene classes typical of bivalves.
+3. **Conservation across orthologs** — do one-to-one orthologs keep their methylation
+   level and class between the two species? Genomic CpG observed/expected (CpG o/e),
+   the long-term footprint of germline methylation, is compared alongside the
+   measured levels and is available even for a species without methylation data.
+
+**Inputs** (all listed in `data/14-species.tsv`, paths relative to the repo root):
+
+| | *O. chilensis* | *O. lurida* |
+|---|---|---|
+| genome + GFF | `merged_out.fasta`, `GN.gene.gff3` (as in `09`, `13`) | set in `data/14-species.tsv` |
+| per-CpG calls | 15 WGBS oysters from `13.2` | `data/14-Olur-meth-samples.tsv` (to fill in) |
+| orthologs | `output/14-meth-compare/orthologs/Och_Olur_rbh.tsv` from `14.1` | |
+
+Per-CpG files are Bismark coverage format, ideally strand-merged
+(`coverage2cytosine --merge_CpG`). The *O. lurida* calls must be on the same assembly
+as its GFF: published Olympia oyster methylation data were aligned to `Olurida_v081`,
+not the newer chromosome-level `xbOstLuri2` assembly, so either use the matching
+v081 annotation or re-align the reads.
+
+**Assay caveat.** If the *O. lurida* data are MBD-BS or RRBS rather than WGBS, the
+enrichment step inflates absolute methylation and drops unmethylated regions. In
+that case read the species differences in global level and feature partitioning as
+qualitative, and lean on within-species ranks (the gene class and Spearman
+correlations below), which are robust to the shift.
+
+**Upstream:** `13` finished for *O. chilensis*; `code/14.1-meth-compare-orthologs.sh` run.
+Run where `13.4` runs (lab R container on a compute node, ~100 GB RAM for the
+pooled CpG tables). Paths are relative to `code/`, like the other notebooks.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 8, fig.height = 5)
+```
+
+```{r packages}
+library(data.table)
+library(GenomicRanges)
+library(rtracklayer)
+library(Rsamtools)
+library(Biostrings)
+library(tidyverse)
+# tidyverse masks the range versions of reduce() (purrr) and setdiff() (dplyr),
+# so range operations below are namespaced.
+```
+
+```{r parameters}
+out_dir <- "../output/14-meth-compare"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+sample_min_cov <- 5      # per-sample CpG depth for per-oyster summaries
+pooled_min_cov <- 10     # species-level CpG depth after summing oysters
+min_gene_cpgs  <- 5      # covered CpGs required per gene for gbM
+promoter_bp    <- 2000   # upstream window treated as promoter
+meth_hi        <- 50     # % at or above: methylated CpG
+meth_lo        <- 10     # % below: unmethylated CpG (between = sparse)
+```
+
+# Species and samples
+
+```{r species}
+species <- read_tsv("../data/14-species.tsv", show_col_types = FALSE) %>%
+  mutate(across(c(genome_fa, gff, meth_samples), ~ file.path("..", .x)))
+stopifnot(nrow(species) == 2)
+sp_keys   <- species$species                     # c("Och", "Olur")
+sp_labels <- set_names(species$label, sp_keys)
+
+samples <- map_dfr(seq_len(nrow(species)), function(i) {
+  f <- species$meth_samples[i]
+  if (!file.exists(f)) return(NULL)
+  read_tsv(f, comment = "#", show_col_types = FALSE,
+           col_types = cols(.default = "c")) %>%
+    mutate(species = species$species[i], cov_file = file.path("..", cov_file))
+})
+
+missing <- samples %>% filter(!file.exists(cov_file))
+if (nrow(missing) > 0) {
+  warning(nrow(missing), " CpG files not found; dropping them:\n",
+          paste(missing$cov_file, collapse = "\n"))
+  samples <- samples %>% filter(file.exists(cov_file))
+}
+
+has_meth <- set_names(sp_keys %in% samples$species, sp_keys)
+if (!any(has_meth)) message("No CpG files for either species: running CpG o/e sections only.")
+samples %>% count(species, assay, group)
+has_meth
+```
+
+`has_meth` controls which sections run per species: a species without CpG files is
+still carried through the CpG o/e and ortholog sections. With no CpG files at all,
+the measured-methylation sections are skipped.
+
+# Genome annotation
+
+The same feature definitions as `13.4`, applied to each genome: protein-coding genes
+are those with an mRNA child, and each CpG is assigned to one feature by priority
+exon > intron > promoter > intergenic.
+
+```{r features}
+build_annotation <- function(genome_fa, gff_file) {
+  if (!file.exists(paste0(genome_fa, ".fai"))) indexFa(genome_fa)
+  fai <- read_tsv(paste0(genome_fa, ".fai"), col_names = c("chr", "len"),
+                  col_select = 1:2, show_col_types = FALSE)
+  si  <- Seqinfo(fai$chr, fai$len)
+
+  gff <- import(gff_file)
+  seqlevels(gff, pruning.mode = "coarse") <- seqlevels(si)   # align to FASTA order
+  seqinfo(gff) <- si
+  first_parent <- function(x) as.character(unlist(heads(x$Parent, 1)))
+
+  mrna  <- gff[gff$type == "mRNA" & lengths(gff$Parent) > 0]
+  tx2gene <- set_names(first_parent(mrna), mrna$ID)
+  genes <- gff[gff$type == "gene" & gff$ID %in% tx2gene]
+  names(genes) <- genes$ID
+
+  ex <- gff[gff$type == "exon" & lengths(gff$Parent) > 0]
+  ex <- ex[first_parent(ex) %in% names(tx2gene)]
+  ex$gene_id <- tx2gene[first_parent(ex)]
+
+  gene_body <- IRanges::reduce(genes, ignore.strand = TRUE)
+  exons     <- IRanges::reduce(ex, ignore.strand = TRUE)
+  introns   <- BiocGenerics::setdiff(gene_body, exons)
+  upstream  <- trim(promoters(genes, upstream = promoter_bp, downstream = 0))
+  promoters <- BiocGenerics::setdiff(IRanges::reduce(upstream, ignore.strand = TRUE), gene_body)
+  intergenic <- gaps(IRanges::reduce(c(gene_body, promoters)))
+  intergenic <- intergenic[strand(intergenic) == "*"]
+
+  list(seqinfo = si, genes = genes,
+       exons_by_gene = IRanges::reduce(split(granges(ex), ex$gene_id), ignore.strand = TRUE),
+       features = list(exon = exons, intron = introns,
+                       promoter = promoters, intergenic = intergenic))
+}
+
+annot <- map(set_names(seq_len(nrow(species)), sp_keys),
+             ~ build_annotation(species$genome_fa[.x], species$gff[.x]))
+
+map_dfr(annot, ~ tibble(
+  genes       = length(.x$genes),
+  genome_mb   = sum(as.numeric(seqlengths(.x$seqinfo))) / 1e6,
+  exon_mb     = sum(width(.x$features$exon)) / 1e6,
+  intron_mb   = sum(width(.x$features$intron)) / 1e6,
+  promoter_mb = sum(width(.x$features$promoter)) / 1e6,
+  intergenic_mb = sum(width(.x$features$intergenic)) / 1e6
+), .id = "species")
+```
+
+# Genomic CpG o/e
+
+CpG o/e = (CpG count × length) / (C count × G count). Germline methylation
+deaminates methylated C to T over evolutionary time, so genes that are habitually
+methylated are CpG-depleted (low o/e). In bivalves the gene distribution is often
+bimodal, and that pattern is a prediction about the measured gbM below. It is
+computed for both the gene body and the exons (CDS-dominated, more comparable across
+annotations). CpG o/e is strand-symmetric, so strand is ignored.
+
+```{r cpg-oe}
+cpg_oe <- function(genome_fa, gr_list) {
+  fa  <- FaFile(genome_fa)
+  gr  <- unlist(gr_list, use.names = FALSE)
+  ids <- rep(names(gr_list), lengths(gr_list))
+  seqs <- getSeq(fa, gr)
+  counts <- cbind(
+    len = as.numeric(width(seqs)),
+    CG  = oligonucleotideFrequency(seqs, 2)[, "CG"],
+    letterFrequency(seqs, c("C", "G"))
+  )
+  agg <- rowsum(counts, ids)          # sum exon pieces per gene
+  tibble(gene_id = rownames(agg),
+         length  = agg[, "len"],
+         cpg_oe  = agg[, "CG"] * agg[, "len"] / (agg[, "C"] * agg[, "G"]))
+}
+
+gene_oe <- map_dfr(set_names(seq_len(nrow(species)), sp_keys), function(i) {
+  a <- annot[[i]]
+  body <- split(granges(a$genes), names(a$genes))
+  full_join(
+    cpg_oe(species$genome_fa[i], body) %>% rename(gene_len = length, oe_gene = cpg_oe),
+    cpg_oe(species$genome_fa[i], a$exons_by_gene) %>% rename(exon_len = length, oe_exon = cpg_oe),
+    by = "gene_id")
+}, .id = "species") %>%
+  filter(is.finite(oe_exon))
+
+write_tsv(gene_oe, file.path(out_dir, "gene_cpg_oe.tsv"))
+
+gene_oe %>%
+  pivot_longer(c(oe_gene, oe_exon), names_to = "region", values_to = "cpg_oe") %>%
+  filter(cpg_oe < 2) %>%
+  ggplot(aes(cpg_oe, fill = species)) +
+  geom_density(alpha = 0.5) +
+  facet_wrap(~region) +
+  labs(x = "CpG o/e", title = "Gene CpG o/e by species") + theme_bw()
+```
+
+# Per-CpG methylation
+
+Each per-sample file is read once; per-oyster summaries are taken at
+`sample_min_cov`, then counts are summed across oysters within a species to give a
+pooled species-level methylome. Pooling is appropriate for the between-species
+question: individual variation within a species is far smaller than the divergence
+being compared here, and pooling recovers sites that no single low-depth oyster covers.
+
+```{r read-cpg, eval = any(has_meth)}
+read_cov <- function(f) {
+  fread(f, header = FALSE, select = c(1, 2, 5, 6),
+        col.names = c("chr", "start", "nC", "nT"))
+}
+
+per_sample <- list()
+pooled <- list()
+for (sp in sp_keys[has_meth]) {
+  ss <- filter(samples, species == sp)
+  d <- rbindlist(set_names(map(ss$cov_file, read_cov), ss$sample), idcol = "sample")
+  d[, cov := nC + nT]
+
+  per_sample[[sp]] <- d[cov >= sample_min_cov,
+    .(cpgs = .N,
+      global_meth_pct = 100 * sum(nC) / sum(cov),
+      pct_meth_cpgs   = 100 * mean(100 * nC / cov >= meth_hi)),
+    by = sample]
+
+  pooled[[sp]] <- d[, .(nC = sum(nC), nT = sum(nT), n_samples = .N), by = .(chr, start)
+                   ][nC + nT >= pooled_min_cov]
+  rm(d); gc()
+}
+
+per_sample <- rbindlist(per_sample, idcol = "species") %>%
+  left_join(select(samples, species, sample, group, assay), by = c("species", "sample"))
+write_tsv(per_sample, file.path(out_dir, "per_sample_summary.tsv"))
+
+ggplot(per_sample, aes(species, global_meth_pct, colour = group)) +
+  geom_jitter(width = 0.15, size = 3) +
+  labs(y = "Global CpG methylation (%)",
+       subtitle = paste0("CpGs at >= ", sample_min_cov, "x per oyster")) +
+  theme_bw()
+```
+
+```{r pooled-cpgs, eval = any(has_meth)}
+cpg_gr <- map(pooled, function(p) {
+  GRanges(p$chr, IRanges(p$start, width = 1),
+          nC = p$nC, nT = p$nT, pct = 100 * p$nC / (p$nC + p$nT))
+})
+
+# Contig names in the CpG files must match the GFF/genome; catch a wrong assembly early.
+iwalk(cpg_gr, function(gr, sp) {
+  shared <- mean(as.character(seqnames(gr)) %in% seqlevels(annot[[sp]]$seqinfo))
+  if (shared < 0.95)
+    stop(sp, ": only ", round(100 * shared), "% of CpGs are on contigs in the genome ",
+         "index - are the CpG calls from a different assembly?")
+})
+
+annotate_feature <- function(gr, features) {
+  out <- rep(NA_character_, length(gr))
+  for (f in names(features)) {
+    hit <- is.na(out) & overlapsAny(gr, features[[f]], ignore.strand = TRUE)
+    out[hit] <- f
+  }
+  factor(out, levels = names(features))
+}
+
+for (sp in names(cpg_gr)) {
+  cpg_gr[[sp]]$feature <- annotate_feature(cpg_gr[[sp]], annot[[sp]]$features)
+  cpg_gr[[sp]]$status  <- cut(cpg_gr[[sp]]$pct, c(-Inf, meth_lo, meth_hi, Inf),
+                              right = FALSE,
+                              labels = c("unmethylated", "sparse", "methylated"))
+}
+
+cpg_tbl <- imap_dfr(cpg_gr, ~ as_tibble(mcols(.x)[, c("pct", "feature", "status")]) %>%
+                      mutate(species = .y))
+
+cpg_tbl %>%
+  group_by(species) %>%
+  summarise(cpgs = n(), mean_pct = mean(pct),
+            pct_methylated = 100 * mean(status == "methylated"),
+            pct_unmethylated = 100 * mean(status == "unmethylated")) %>%
+  write_tsv(file.path(out_dir, "methylome_summary.tsv")) %>%
+  print()
+```
+
+## Distribution
+
+```{r cpg-distribution, eval = any(has_meth)}
+ggplot(cpg_tbl, aes(pct, after_stat(density), fill = species)) +
+  geom_histogram(binwidth = 5, boundary = 0, position = "identity", alpha = 0.5) +
+  labs(x = "% methylation per CpG (pooled)") + theme_bw()
+```
+
+## Feature partitioning
+
+Where is methylation concentrated? Bivalves typically methylate gene bodies
+(exons and introns) and leave promoters and intergenic DNA largely unmethylated.
+
+```{r features-meth, eval = any(has_meth)}
+feature_summary <- cpg_tbl %>%
+  group_by(species, feature) %>%
+  summarise(cpgs = n(), mean_pct = mean(pct),
+            pct_methylated = 100 * mean(status == "methylated"), .groups = "drop") %>%
+  group_by(species) %>%
+  mutate(share_of_methylated = 100 * cpgs * pct_methylated / sum(cpgs * pct_methylated)) %>%
+  ungroup()
+write_tsv(feature_summary, file.path(out_dir, "feature_summary.tsv"))
+feature_summary
+
+feature_summary %>%
+  pivot_longer(c(pct_methylated, share_of_methylated)) %>%
+  ggplot(aes(feature, value, fill = species)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~name, scales = "free_y",
+             labeller = as_labeller(c(pct_methylated = "% of CpGs in feature methylated",
+                                      share_of_methylated = "% of all methylated CpGs"))) +
+  labs(x = NULL, y = NULL) + theme_bw()
+```
+
+# Gene-body methylation
+
+Per gene: methylated / total calls summed over its covered CpGs (pooled across
+oysters). Genes are split into methylated and unmethylated classes with a
+two-group k-means on logit(gbM), separately per species, so the boundary adapts to
+each assay rather than using one fixed cut-off.
+
+```{r gene-body, eval = any(has_meth)}
+gene_meth <- imap_dfr(cpg_gr, function(gr, sp) {
+  ov <- findOverlaps(gr, annot[[sp]]$genes, ignore.strand = TRUE)
+  tibble(gene_id = names(annot[[sp]]$genes)[subjectHits(ov)],
+         nC = gr$nC[queryHits(ov)], nT = gr$nT[queryHits(ov)]) %>%
+    group_by(gene_id) %>%
+    summarise(n_cpg = n(), gbm_pct = 100 * sum(nC) / sum(nC + nT)) %>%
+    filter(n_cpg >= min_gene_cpgs) %>%
+    mutate(species = sp)
+})
+
+classify <- function(pct) {
+  x  <- qlogis(pmin(pmax(pct / 100, 0.005), 0.995))
+  km <- kmeans(x, centers = quantile(x, c(0.1, 0.9)))
+  hi <- which.max(km$centers)
+  factor(if_else(km$cluster == hi, "methylated", "unmethylated"),
+         levels = c("unmethylated", "methylated"))
+}
+
+gene_meth <- gene_meth %>%
+  group_by(species) %>%
+  mutate(class = classify(gbm_pct)) %>%
+  ungroup()
+write_tsv(gene_meth, file.path(out_dir, "gene_body_methylation.tsv"))
+
+gene_meth %>%
+  group_by(species, class) %>%
+  summarise(genes = n(), min_pct = min(gbm_pct), max_pct = max(gbm_pct),
+            .groups = "drop") %>%
+  group_by(species) %>% mutate(pct_genes = 100 * genes / sum(genes))
+
+ggplot(gene_meth, aes(gbm_pct, fill = class)) +
+  geom_histogram(binwidth = 2, boundary = 0) +
+  facet_wrap(~species, ncol = 1, scales = "free_y",
+             labeller = as_labeller(sp_labels)) +
+  labs(x = "Gene-body methylation (%)", y = "Genes") + theme_bw()
+```
+
+## Measured gbM vs CpG o/e
+
+Within each species, methylated genes should be CpG-depleted. A clear negative
+relationship checks the data and justifies using CpG o/e as a proxy for the
+species that lacks methylation calls.
+
+```{r gbm-vs-oe, eval = any(has_meth)}
+gbm_oe <- inner_join(gene_meth, gene_oe, by = c("species", "gene_id"))
+
+gbm_oe %>%
+  group_by(species) %>%
+  summarise(genes = n(),
+            rho_gene = cor(gbm_pct, oe_gene, method = "spearman"),
+            rho_exon = cor(gbm_pct, oe_exon, method = "spearman"))
+
+ggplot(filter(gbm_oe, oe_exon < 2), aes(oe_exon, gbm_pct)) +
+  geom_bin2d(bins = 60) +
+  geom_smooth(colour = "red", se = FALSE) +
+  facet_wrap(~species, labeller = as_labeller(sp_labels)) +
+  scale_fill_viridis_c(trans = "log10") +
+  labs(x = "Exon CpG o/e", y = "Gene-body methylation (%)") + theme_bw()
+```
+
+# Orthologs
+
+One-to-one orthologs are reciprocal best DIAMOND hits from `14.1`. Each comparison
+uses all orthologs where both species have the measurement.
+
+```{r orthologs}
+rbh_file <- file.path(out_dir, "orthologs", paste0(sp_keys[1], "_", sp_keys[2], "_rbh.tsv"))
+rbh <- read_tsv(rbh_file, show_col_types = FALSE)
+gene_cols <- paste0(sp_keys, "_gene")
+message(nrow(rbh), " one-to-one orthologs")
+
+# One row per ortholog pair, with each species' metrics suffixed by species key.
+wide <- function(tbl, cols) {
+  per_sp <- map(sp_keys, function(sp) {
+    tbl %>% filter(species == sp) %>%
+      select(gene_id, all_of(cols)) %>%
+      rename_with(~ paste0(.x, "_", sp), all_of(cols)) %>%
+      rename(!!paste0(sp, "_gene") := gene_id)
+  })
+  rbh %>%
+    select(all_of(gene_cols), pident) %>%
+    left_join(per_sp[[1]], by = gene_cols[1]) %>%
+    left_join(per_sp[[2]], by = gene_cols[2])
+}
+
+orth <- wide(gene_oe, c("oe_gene", "oe_exon"))
+if (any(has_meth)) {
+  orth <- orth %>%
+    left_join(wide(gene_meth, c("n_cpg", "gbm_pct", "class")) %>%
+                select(-pident), by = gene_cols)
+}
+write_tsv(orth, file.path(out_dir, "ortholog_methylation.tsv"))
+```
+
+## CpG o/e conservation
+
+Available for every ortholog regardless of methylation data. A strong correlation
+means the two lineages have methylated the same genes over the long term.
+
+```{r orth-oe}
+x_oe <- paste0("oe_exon_", sp_keys[1]); y_oe <- paste0("oe_exon_", sp_keys[2])
+orth_oe <- orth %>% filter(.data[[x_oe]] < 2, .data[[y_oe]] < 2)
+rho_oe <- cor(orth_oe[[x_oe]], orth_oe[[y_oe]], method = "spearman")
+
+ggplot(orth_oe, aes(.data[[x_oe]], .data[[y_oe]])) +
+  geom_bin2d(bins = 60) + geom_abline(linetype = 2) +
+  scale_fill_viridis_c(trans = "log10") +
+  labs(x = paste("Exon CpG o/e,", sp_labels[1]), y = paste("Exon CpG o/e,", sp_labels[2]),
+       subtitle = sprintf("%d orthologs, Spearman rho = %.2f", nrow(orth_oe), rho_oe)) +
+  theme_bw()
+```
+
+## Measured gbM conservation
+
+Runs when both species have methylation calls.
+
+```{r orth-gbm, eval = all(has_meth)}
+x_m <- paste0("gbm_pct_", sp_keys[1]); y_m <- paste0("gbm_pct_", sp_keys[2])
+x_c <- paste0("class_", sp_keys[1]);   y_c <- paste0("class_", sp_keys[2])
+orth_m <- orth %>% filter(!is.na(.data[[x_m]]), !is.na(.data[[y_m]]))
+rho_m <- cor(orth_m[[x_m]], orth_m[[y_m]], method = "spearman")
+
+ggplot(orth_m, aes(.data[[x_m]], .data[[y_m]])) +
+  geom_bin2d(bins = 50) + geom_abline(linetype = 2) +
+  scale_fill_viridis_c(trans = "log10") +
+  labs(x = paste("gbM (%),", sp_labels[1]), y = paste("gbM (%),", sp_labels[2]),
+       subtitle = sprintf("%d orthologs, Spearman rho = %.2f", nrow(orth_m), rho_m)) +
+  theme_bw()
+
+# Class agreement: is a gene methylated in one species more likely methylated in the other?
+class_tab <- table(orth_m[[x_c]], orth_m[[y_c]],
+                   dnn = paste0(sp_keys, " class"))
+class_tab
+fisher.test(class_tab)
+message(sprintf("Class agreement: %.1f%% of %d orthologs",
+                100 * sum(diag(class_tab)) / sum(class_tab), sum(class_tab)))
+
+# Genes whose methylation class differs between species: candidates for
+# lineage-specific epigenetic change (check expression and annotation next).
+orth_m %>%
+  filter(.data[[x_c]] != .data[[y_c]]) %>%
+  mutate(switch = paste0(sp_keys[1], "_", .data[[x_c]], "__", sp_keys[2], "_", .data[[y_c]]),
+         delta_pct = .data[[y_m]] - .data[[x_m]]) %>%
+  arrange(desc(abs(delta_pct))) %>%
+  write_tsv(file.path(out_dir, "ortholog_class_switches.tsv")) %>%
+  count(switch)
+```
+
+## Does conservation depend on sequence divergence?
+
+Ortholog pairs binned by protein identity: if methylation tracks sequence
+conservation, gbM agreement should rise with identity.
+
+```{r orth-divergence, eval = all(has_meth)}
+orth_m %>%
+  mutate(identity_bin = cut(pident, c(0, 50, 70, 85, 100), include.lowest = TRUE)) %>%
+  group_by(identity_bin) %>%
+  summarise(orthologs = n(),
+            rho = cor(.data[[x_m]], .data[[y_m]], method = "spearman"),
+            class_agreement_pct = 100 * mean(.data[[x_c]] == .data[[y_c]]))
+```
+
+# Next steps
+
+- **Function:** GO enrichment of conserved-methylated, conserved-unmethylated and
+  class-switch orthologs against all tested orthologs, using the Swiss-Prot/GO join
+  from `03` (Och gene IDs).
+- **Expression:** join `ortholog_methylation.tsv` to the `09` limma tables on the Och
+  gene ID, to ask whether genes that gained or lost gbM in *O. chilensis* differ in
+  expression level or breadth.
+- **Population layer:** both datasets have three populations. Once `13.4` is done,
+  compare the within-species population DMGs (`DMG_*.tsv`) with an equivalent
+  *O. lurida* analysis: are the same orthologs population-variable in both species?
+- **Repeats/TEs:** add a RepeatMasker GFF per species to the feature set; TE
+  methylation differs widely among bivalves and is not captured by the gene-centric
+  features here.
+
+```{r session}
+sessionInfo()
+```
