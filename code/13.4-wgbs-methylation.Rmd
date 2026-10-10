@@ -337,6 +337,8 @@ tiles <- tileMethylCounts(meth_norm, win.size = tile_size, step.size = tile_size
 tiles_unite <- methylKit::unite(tiles, destrand = FALSE, min.per.group = min_per_group,
                                 mc.cores = cores)
 message(nrow(tiles_unite), " tiles tested")
+# Tested tiles = the background for DMR gene-set tests (13.8).
+export.bed(as(tiles_unite, "GRanges"), file.path(out_dir, "tiles_tested.bed"))
 
 dmr <- imap(contrasts, function(g, name) {
   d <- run_pair(tiles_unite, g)

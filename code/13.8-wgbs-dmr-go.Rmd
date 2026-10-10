@@ -1,0 +1,236 @@
+---
+title: "13.8 - GO enrichment of DMR genes"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+date: "2026-10-10"
+---
+
+Are genes near population differentially methylated regions (DMRs) enriched for
+particular functions? DMRs come from `13.4` (1 kb tiles, SNP-masked); GO terms come
+from the Swiss-Prot best hit of each GN gene (`13.5`).
+
+**Gene sets.**
+
+- *DMR genes:* genes whose body or `promoter_bp` upstream overlaps a DMR, the same
+  promoter definition as the `13.4` feature annotation.
+- *Background:* genes whose body or promoter overlaps a tile that 13.4 actually
+  tested (`tiles_tested.bed`), so the comparison is against genes that *could* have
+  produced a DMR, not the whole genome. Both sets are restricted to genes with at
+  least one GO term.
+
+**Test.** One-sided Fisher's exact test per GO term, with each gene's terms
+propagated to all ancestor terms (the topGO "classic" method, written out here
+because topGO is not in the lab container). Terms with fewer than `min_term` or more
+than `max_term` background genes are skipped; BH correction is per ontology.
+
+BH runs over every term in the size range; only terms with at least `min_hits` DMR
+genes are then reported.
+
+**Caveats.** Most DMRs are intergenic, so the DMR gene sets are small and the test
+has little power. GO terms come from each gene's best Swiss-Prot hit, so tandem
+paralogs that share a hit (and often sit in the same DMR) count as independent genes
+and can make one locus look like an enriched term; check the `genes` column. Treat
+individual terms as leads, not results.
+
+**Upstream:** `13.4` (with `tiles_tested.bed`) and `13.5`. Paths are relative to
+`code/`, like the other notebooks; runs in the lab R container.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 8, fig.height = 6)
+```
+
+```{r packages}
+library(GenomicRanges)
+library(rtracklayer)
+library(GO.db)
+library(tidyverse)
+# tidyverse masks the range versions of reduce()/setdiff(); none are used here.
+```
+
+```{r parameters}
+dm_dir      <- "../output/13-wgbs/13.4-methylation"
+annot_file  <- "../output/13-wgbs/13.5-gene-annotation/GN_gene_annotation.tsv"
+genome_dir  <- "../data/13-wgbs-genome"
+out_dir     <- "../output/13-wgbs/13.8-dmr-go"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+promoter_bp <- 2000
+min_term    <- 5      # background genes per term
+max_term    <- 500
+min_hits    <- 2      # DMR genes per term to report
+fdr         <- 0.05
+```
+
+# Genes, DMRs, tested tiles
+
+```{r inputs}
+seqlens <- read_tsv(file.path(genome_dir, "genome.chrom.sizes"),
+                    col_names = c("chr", "len"), show_col_types = FALSE)
+si <- Seqinfo(seqlens$chr, seqlens$len)
+
+gff <- import(file.path(genome_dir, "GN.gene.gff3"))
+seqlevels(gff, pruning.mode = "coarse") <- seqlevels(si)
+seqinfo(gff) <- si
+genes <- gff[gff$type == "gene"]
+names(genes) <- genes$ID
+
+# Gene body plus upstream promoter, strand-aware.
+gene_ext <- trim(resize(genes, width(genes) + promoter_bp, fix = "end"))
+
+read_dm <- function(f) {
+  read_tsv(f, show_col_types = FALSE) %>%
+    { GRanges(.$seqnames, IRanges(.$start, .$end), meth.diff = .$meth.diff,
+              feature = .$feature) }
+}
+dmr_files <- list.files(dm_dir, pattern = "^DMR_.*_vs_.*\\.tsv$", full.names = TRUE)
+dmrs <- set_names(map(dmr_files, read_dm),
+                  sub("^DMR_(.*)\\.tsv$", "\\1", basename(dmr_files)))
+tiles <- import(file.path(dm_dir, "tiles_tested.bed"))
+
+map_int(dmrs, length)
+length(tiles)
+```
+
+# GO annotation
+
+`go_ids` holds the Swiss-Prot best hit's GO terms. Each gene gets those terms plus
+all their ancestors in the same ontology.
+
+```{r go}
+annot <- read_tsv(annot_file, show_col_types = FALSE)
+
+gene_go <- annot %>%
+  select(gene_id, go_ids) %>%
+  filter(!is.na(go_ids)) %>%
+  separate_rows(go_ids, sep = ";\\s*") %>%
+  rename(go_id = go_ids) %>%
+  filter(str_detect(go_id, "^GO:\\d{7}$")) %>%
+  distinct()
+
+go_ont <- suppressMessages(AnnotationDbi::select(
+  GO.db, keys = unique(gene_go$go_id), columns = c("ONTOLOGY", "TERM"), keytype = "GOID"))
+
+ancestors <- list(BP = as.list(GOBPANCESTOR), MF = as.list(GOMFANCESTOR),
+                  CC = as.list(GOCCANCESTOR))
+
+gene_go_prop <- gene_go %>%
+  inner_join(go_ont, by = c("go_id" = "GOID")) %>%
+  mutate(anc = map2(go_id, ONTOLOGY, ~ c(.x, setdiff(ancestors[[.y]][[.x]], "all")))) %>%
+  select(gene_id, ontology = ONTOLOGY, anc) %>%
+  unnest(anc) %>%
+  rename(go_id = anc) %>%
+  distinct()
+
+term_names <- suppressMessages(AnnotationDbi::select(
+  GO.db, keys = unique(gene_go_prop$go_id), columns = "TERM", keytype = "GOID")) %>%
+  rename(go_id = GOID, term = TERM)
+
+tibble(genes_with_go = n_distinct(gene_go$gene_id),
+       direct_terms  = n_distinct(gene_go$go_id),
+       terms_after_propagation = n_distinct(gene_go_prop$go_id))
+```
+
+# Enrichment
+
+```{r enrichment}
+genes_hit <- function(gr) names(genes)[unique(subjectHits(findOverlaps(gr, gene_ext, ignore.strand = TRUE)))]
+
+universe <- intersect(genes_hit(tiles), unique(gene_go_prop$gene_id))
+
+go_fisher <- function(set, universe) {
+  set <- intersect(set, universe)
+  gp  <- filter(gene_go_prop, gene_id %in% universe)
+  gp %>%
+    group_by(ontology, go_id) %>%
+    summarise(bg = n(), hits = sum(gene_id %in% set),
+              genes = paste(sort(gene_id[gene_id %in% set]), collapse = ";"),
+              .groups = "drop") %>%
+    filter(bg >= min_term, bg <= max_term) %>%
+    mutate(n_set = length(set), n_universe = length(universe),
+           expected = bg * n_set / n_universe,
+           fold = hits / expected,
+           p = map2_dbl(hits, bg, ~ fisher.test(
+             matrix(c(.x, length(set) - .x, .y - .x,
+                      length(universe) - length(set) - .y + .x), 2),
+             alternative = "greater")$p.value)) %>%
+    group_by(ontology) %>%
+    mutate(fdr = p.adjust(p, "BH")) %>%   # over every term in the size range,
+    ungroup() %>%                          # before dropping low-hit terms
+    filter(hits >= min_hits) %>%
+    left_join(term_names, by = "go_id") %>%
+    arrange(ontology, p) %>%
+    select(ontology, go_id, term, hits, bg, expected, fold, p, fdr, genes)
+}
+
+results <- list()
+gene_sets <- list()
+for (cn in names(dmrs)) {
+  d <- dmrs[[cn]]
+  sets <- list(all = genes_hit(d),
+               hyper = genes_hit(d[d$meth.diff > 0]),   # higher in the 2nd population
+               hypo  = genes_hit(d[d$meth.diff < 0]))
+  for (dir in names(sets)) {
+    key <- paste(cn, dir, sep = "_")
+    gene_sets[[key]] <- sets[[dir]]
+    results[[key]] <- go_fisher(sets[[dir]], universe)
+    write_tsv(results[[key]], file.path(out_dir, paste0("GO_", key, ".tsv")))
+  }
+}
+
+summary_tbl <- imap_dfr(gene_sets, ~ tibble(
+  set = .y,
+  dmr_genes = length(.x),
+  dmr_genes_with_go = length(intersect(.x, universe)),
+  universe = length(universe),
+  terms_reported = nrow(results[[.y]]),
+  terms_fdr = sum(results[[.y]]$fdr < fdr)))
+write_tsv(summary_tbl, file.path(out_dir, "GO_summary.tsv"))
+summary_tbl
+```
+
+## Top terms
+
+```{r top-terms}
+top <- imap_dfr(results, ~ .x %>% group_by(ontology) %>% slice_min(p, n = 10, with_ties = FALSE) %>%
+                  ungroup() %>% mutate(set = .y)) %>%
+  filter(str_ends(set, "_all"))
+top %>% select(set, ontology, term, hits, bg, fold, p, fdr)
+
+if (nrow(top) > 0) {
+  top %>%
+    mutate(term = fct_reorder(str_trunc(term, 60), -log10(p))) %>%
+    ggplot(aes(-log10(p), term, size = hits, colour = fdr < fdr)) +
+    geom_point() +
+    facet_grid(ontology ~ ., scales = "free_y", space = "free_y") +
+    scale_colour_manual(values = c(`FALSE` = "grey50", `TRUE` = "firebrick"),
+                        name = paste("FDR <", fdr)) +
+    labs(x = "-log10 Fisher p", y = NULL,
+         title = "GO terms among DMR genes (body + promoter)") +
+    theme_bw()
+}
+```
+
+## DMR genes
+
+Every gene near a DMR with its best Swiss-Prot hit, for reading through directly.
+
+```{r dmr-genes}
+dmr_gene_tbl <- imap_dfr(dmrs, function(d, cn) {
+  ov <- findOverlaps(d, gene_ext, ignore.strand = TRUE)
+  tibble(contrast = cn, gene_id = names(genes)[subjectHits(ov)],
+         dmr = paste0(seqnames(d), ":", start(d), "-", end(d))[queryHits(ov)],
+         meth_diff = d$meth.diff[queryHits(ov)],
+         dmr_feature = as.character(d$feature[queryHits(ov)]))
+}) %>%
+  left_join(select(annot, gene_id, entry_name, protein_name, evalue), by = "gene_id") %>%
+  arrange(contrast, desc(abs(meth_diff)))
+write_tsv(dmr_gene_tbl, file.path(out_dir, "DMR_genes.tsv"))
+dmr_gene_tbl %>% select(gene_id, meth_diff, dmr_feature, protein_name)
+```
+
+```{r session}
+sessionInfo()
+```
