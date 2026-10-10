@@ -11,7 +11,8 @@ General characterization of CpG methylation in *Ostrea chilensis*: how much of t
 genome is methylated, how methylation is distributed across genomic features and
 along chromosomes, what gene-body methylation looks like, and whether gene
 methylation tracks gene function. Population differences are in `13.4`; this
-notebook describes the shared methylome, pooling all 15 oysters.
+notebook describes the shared methylome, pooling the 9 independent oysters in
+`data/13-wgbs-samples.tsv` (duplicated libraries excluded; see README Known issues).
 
 **Upstream:**
 
@@ -27,8 +28,8 @@ UTRs**, so "exon" here means coding exon and 5'/3' UTR methylation can't be sepa
 from the flanks.
 
 **Pooling.** At ~6–9x raw coverage per oyster, single-sample per-CpG estimates are
-noisy. For the landscape, counts are summed across all 15 oysters per CpG (a
-species-level methylome at roughly 15x the depth). Per-oyster values are kept for
+noisy. For the landscape, counts are summed across all 9 oysters per CpG (a
+species-level methylome at roughly 9x the depth of one oyster). Per-oyster values are kept for
 global, per-feature, and per-gene summaries, which pool many CpGs and so are stable
 within a single animal; these show whether the patterns are consistent across
 individuals and populations.
@@ -69,7 +70,7 @@ dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 # CpG level (pooled across oysters)
 min_cov_pooled  <- 10     # summed reads per CpG
 max_cov_pctl    <- 0.999  # drop pile-ups (collapsed repeats)
-min_samples     <- 8L     # CpG must have data in >= 8 of 15 oysters
+min_samples     <- 5L     # CpG must have data in >= 5 of 9 oysters
 meth_breaks     <- c(-Inf, 10, 50, Inf)                 # % methylation
 meth_labels     <- c("unmethylated (<10%)", "sparse (10-50%)", "methylated (>=50%)")
 
