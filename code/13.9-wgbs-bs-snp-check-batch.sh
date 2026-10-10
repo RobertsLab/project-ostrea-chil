@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=13.7-bs-snp-batch
+#SBATCH --job-name=13.9-bs-snp-batch
 #SBATCH --account=coenv
 #SBATCH --partition=cpu-g2
 #SBATCH --cpus-per-task=16
@@ -7,13 +7,13 @@
 #SBATCH --time=4:00:00
 #SBATCH --output=output/13-wgbs/logs/%x_%j.out
 
-# Run 13.7 on every region in a table and summarise per region.
+# Run 13.9 on every region in a table and summarise per region.
 # Usage (from the repo root):
-#   sbatch code/13.7-wgbs-bs-snp-check-batch.sh output/13-wgbs/13.4-methylation/DMR_Qui_vs_Rio.tsv [flank] [pops]
+#   sbatch code/13.9-wgbs-bs-snp-check-batch.sh output/13-wgbs/13.4-methylation/DMR_Qui_vs_Rio.tsv [flank] [pops]
 # The table needs seqnames/start/end columns (13.4 DML/DMR output). Flank
 # defaults to 0: for 1 kb windows, the question is the window itself. The
 # populations compared default to the two in a <...>_<A>_vs_<B>.tsv filename.
-# Writes output/13-wgbs/13.7-bs-snp-check/batch_<table>.tsv with one row per
+# Writes output/13-wgbs/13.9-bs-snp-check/batch_<table>.tsv with one row per
 # region joined to the input table's columns, plus a class per region:
 #   repeat-like                 >= 50% of reads MAPQ < 10 (paralog/repeat mapping)
 #   genetic: CpG-destroying     a differentiated C>T at C / G>A at G, which reads
@@ -21,7 +21,7 @@
 #   genetic: other              another differentiated variant (divergent allele)
 #   untested                    no differentiated variant, but < 50% of the
 #                               region's CpGs had enough genotype reads for a SNP
-#                               to be seen (see 13.7 cpg_testability.tsv)
+#                               to be seen (see 13.9 cpg_testability.tsv)
 #   no genetic signal           none of the above, at a testable depth
 
 set -euo pipefail
@@ -34,8 +34,8 @@ flank="${2:-0}"
 compare="${3:-$(basename "${table}" .tsv | sed -nE 's/.*_([^_]+)_vs_([^_]+)$/\1,\2/p')}"
 jobs="${SLURM_CPUS_PER_TASK:-4}"
 name=$(basename "${table}" .tsv)
-summary="${OUT}/13.7-bs-snp-check/batch_${name}.tsv"
-mkdir -p "${OUT}/13.7-bs-snp-check"
+summary="${OUT}/13.9-bs-snp-check/batch_${name}.tsv"
+mkdir -p "${OUT}/13.9-bs-snp-check"
 
 # One region per line as chr:start-end, from whichever columns are named so.
 regions=$(awk -F'\t' 'NR == 1 {for (i = 1; i <= NF; i++) c[$i] = i; next}
@@ -44,10 +44,10 @@ echo "$(wc -l <<< "${regions}") regions from ${table}, flank ${flank}, comparing
 
 # Each region's output folder is named chr_start-end, so runs never collide.
 xargs -P "${jobs}" -I{} bash -c \
-  'bash code/13.7-wgbs-bs-snp-check.sh "$1" "$2" "$3" > /dev/null 2>&1 || echo "FAILED $1" >&2' _ {} "${flank}" "${compare}" \
+  'bash code/13.9-wgbs-bs-snp-check.sh "$1" "$2" "$3" > /dev/null 2>&1 || echo "FAILED $1" >&2' _ {} "${flank}" "${compare}" \
   <<< "${regions}"
 
-python3 -I - "${table}" "${OUT}/13.7-bs-snp-check" "${SAMPLES}" > "${summary}" <<'EOF'
+python3 -I - "${table}" "${OUT}/13.9-bs-snp-check" "${SAMPLES}" > "${summary}" <<'EOF'
 import csv, sys
 table, root, sheet = sys.argv[1:]
 pop_of = {r["sample"]: r["population"] for r in csv.DictReader(open(sheet), delimiter="\t")}

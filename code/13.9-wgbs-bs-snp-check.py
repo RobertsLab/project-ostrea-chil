@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bisulfite-aware SNP check for one region, from strand-split mpileups.
 
-Called by 13.7-wgbs-bs-snp-check.sh, which writes <sample>.CT.pileup and
+Called by 13.9-wgbs-bs-snp-check.sh, which writes <sample>.CT.pileup and
 <sample>.GA.pileup (Bismark XG:CT = original top strand, XG:GA = original
 bottom strand) plus ref.seq for the padded region into --workdir.
 

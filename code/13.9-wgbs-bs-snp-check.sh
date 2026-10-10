@@ -3,16 +3,16 @@
 # epigenetic, or a C->T SNP / divergent allele that only looks like one?
 #
 # Usage (from the repo root):
-#   bash code/13.7-wgbs-bs-snp-check.sh GN020540              # gene ID from the GFF
-#   bash code/13.7-wgbs-bs-snp-check.sh Chromosome_9B:7221497-7227996
-#   bash code/13.7-wgbs-bs-snp-check.sh GN020540 5000         # flank in bp (default 2000)
-#   bash code/13.7-wgbs-bs-snp-check.sh GN020540 2000 Qui,Rio # populations to compare
+#   bash code/13.9-wgbs-bs-snp-check.sh GN020540              # gene ID from the GFF
+#   bash code/13.9-wgbs-bs-snp-check.sh Chromosome_9B:7221497-7227996
+#   bash code/13.9-wgbs-bs-snp-check.sh GN020540 5000         # flank in bp (default 2000)
+#   bash code/13.9-wgbs-bs-snp-check.sh GN020540 2000 Qui,Rio # populations to compare
 #                                                             # (default: all pairs)
 #
 # Splits each oyster's deduplicated BAM by Bismark strand (XG:CT / XG:GA),
-# piles up the target +/- flank, and runs 13.7-wgbs-bs-snp-check.py, which
+# piles up the target +/- flank, and runs 13.9-wgbs-bs-snp-check.py, which
 # counts each base only from the strand where bisulfite can't change it.
-# Output: output/13-wgbs/13.7-bs-snp-check/<label>/{variant_sites,cpg_summary}.tsv
+# Output: output/13-wgbs/13.9-bs-snp-check/<label>/{variant_sites,cpg_summary}.tsv
 # plus summary.txt. A single gene takes seconds, so this is fine on a login node;
 # loop over many regions inside an salloc session.
 
@@ -42,7 +42,7 @@ pad_start=$(( start > flank ? start - flank : 1 ))
 pad_end=$(( end + flank < chrom_len ? end + flank : chrom_len ))
 region="${chrom}:${pad_start}-${pad_end}"
 
-WD="${OUT}/13.7-bs-snp-check/${label}"
+WD="${OUT}/13.9-bs-snp-check/${label}"
 mkdir -p "${WD}"
 echo "Target ${chrom}:${start}-${end}; piling up ${region}"
 
@@ -67,7 +67,7 @@ while IFS=$'\t' read -r sample _; do
 done < <(tail -n +2 "${SAMPLES}")
 awk -F'\t' 'NR > 1 {r += $2; l += $3} END {printf "Reads with MAPQ < 10: %d of %d (%.0f%%)\n", l, r, r ? 100 * l / r : 0}' "${WD}/mapq.tsv"
 
-python3 -I code/13.7-wgbs-bs-snp-check.py \
+python3 -I code/13.9-wgbs-bs-snp-check.py \
   --workdir "${WD}" --samples "${SAMPLES}" \
   --region-start "${pad_start}" --target-start "${start}" --target-end "${end}" \
   --compare "${compare}" \
