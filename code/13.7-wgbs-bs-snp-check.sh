@@ -6,6 +6,8 @@
 #   bash code/13.7-wgbs-bs-snp-check.sh GN020540              # gene ID from the GFF
 #   bash code/13.7-wgbs-bs-snp-check.sh Chromosome_9B:7221497-7227996
 #   bash code/13.7-wgbs-bs-snp-check.sh GN020540 5000         # flank in bp (default 2000)
+#   bash code/13.7-wgbs-bs-snp-check.sh GN020540 2000 Qui,Rio # populations to compare
+#                                                             # (default: all pairs)
 #
 # Splits each oyster's deduplicated BAM by Bismark strand (XG:CT / XG:GA),
 # piles up the target +/- flank, and runs 13.7-wgbs-bs-snp-check.py, which
@@ -21,6 +23,7 @@ activate_env
 
 target="${1:?give a gene ID (GN...) or region chr:start-end}"
 flank="${2:-2000}"
+compare="${3:-}"
 
 if [[ "${target}" == *:*-* ]]; then
   chrom="${target%%:*}"; range="${target#*:}"
@@ -45,17 +48,27 @@ echo "Target ${chrom}:${start}-${end}; piling up ${region}"
 
 samtools faidx "${GENOME_FA}" "${region}" | tail -n +2 | tr -d '\n' > "${WD}/ref.seq"
 
+# No MAPQ filter, so the check sees the same reads as the methylation calls
+# (bismark_methylation_extractor doesn't filter on MAPQ). The share of reads
+# with MAPQ < 10 is recorded instead: a high share means repeat/paralog
+# mapping, where the "methylation difference" may be a mapping artefact.
+printf 'sample\treads\tmapq_lt10\n' > "${WD}/mapq.tsv"
 while IFS=$'\t' read -r sample _; do
   bam="${OUT}/dedup/${sample}.sorted.bam"
   [[ -s "${bam}" ]] || { echo "ERROR: missing ${bam}" >&2; exit 1; }
   for xg in CT GA; do
     samtools view -u -d "XG:${xg}" "${bam}" "${region}" |
-      samtools mpileup -B -Q 20 -q 10 -d 10000 -f "${GENOME_FA}" - 2>/dev/null \
+      samtools mpileup -B -Q 20 -q 0 -d 10000 -f "${GENOME_FA}" - 2>/dev/null \
       > "${WD}/${sample}.${xg}.pileup"
   done
+  printf '%s\t%s\t%s\n' "${sample}" \
+    "$(samtools view -c "${bam}" "${region}")" \
+    "$(samtools view -c -e 'mapq < 10' "${bam}" "${region}")" >> "${WD}/mapq.tsv"
 done < <(tail -n +2 "${SAMPLES}")
+awk -F'\t' 'NR > 1 {r += $2; l += $3} END {printf "Reads with MAPQ < 10: %d of %d (%.0f%%)\n", l, r, r ? 100 * l / r : 0}' "${WD}/mapq.tsv"
 
 python3 -I code/13.7-wgbs-bs-snp-check.py \
   --workdir "${WD}" --samples "${SAMPLES}" \
   --region-start "${pad_start}" --target-start "${start}" --target-end "${end}" \
+  --compare "${compare}" \
   | tee "${WD}/summary.txt"

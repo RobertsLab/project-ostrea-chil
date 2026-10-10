@@ -15,8 +15,9 @@ there is a real C->T SNP), while top-strand reads give methylation.
 Writes to --workdir:
   variant_sites.tsv  positions with a non-reference base at >= --min-alt in
                      any oyster (informative depth >= --min-depth), with
-                     per-population mean alt frequency and a flag for sites
-                     that differ between populations by >= --pop-diff
+                     per-population pooled alt frequency, a flag for sites
+                     that differ between the --compare populations, and a
+                     flag for CpG-destroying changes (C>T at C, G>A at G)
   cpg_summary.tsv    per-oyster methylation over target CpGs (top-strand
                      reads), CpGs with C->T SNP evidence, and read depth
 and prints a short summary.
@@ -35,7 +36,12 @@ p.add_argument("--target-start", type=int, required=True, help="gene/region star
 p.add_argument("--target-end", type=int, required=True)
 p.add_argument("--min-depth", type=int, default=4)
 p.add_argument("--min-alt", type=float, default=0.25)
-p.add_argument("--pop-diff", type=float, default=0.5)
+p.add_argument("--pop-diff", type=float, default=0.5,
+               help="pooled alt-frequency difference that counts as differentiated")
+p.add_argument("--compare", default="",
+               help="comma-separated populations to compare (default: all pairs). "
+                    "Use the two populations of the contrast being checked, e.g. Qui,Rio, "
+                    "so a 1-oyster population can't drive the flag")
 a = p.parse_args()
 
 with open(a.samples) as fh:
@@ -43,6 +49,8 @@ with open(a.samples) as fh:
 samples = [r["sample"] for r in sheet]
 pop_of = {r["sample"]: r["population"] for r in sheet}
 pops = list(dict.fromkeys(pop_of.values()))
+compare = a.compare.split(",") if a.compare else pops
+assert all(c in pops for c in compare), f"--compare {a.compare}: populations are {pops}"
 ref = open(f"{a.workdir}/ref.seq").read().strip().upper()
 
 
@@ -90,9 +98,30 @@ for s in samples:
                    if a.target_start <= pos <= a.target_end)
 
 
-def pop_mean(freqs, pop):
-    v = [f for s, (n, f) in freqs.items() if pop_of[s] == pop and n >= a.min_depth]
-    return sum(v) / len(v) if v else None
+def pop_pooled(counts, alt, pop, min_n):
+    """Alt frequency from all of a population's informative reads pooled.
+    Per-oyster depth is ~5x, so pooling is what makes populations comparable."""
+    c = sum((counts[s] for s in samples if pop_of[s] == pop), collections.Counter())
+    n = sum(c.values())
+    return c[alt] / n if n >= min_n else None
+
+
+def differentiated(counts, freqs, alt):
+    """True if two --compare populations differ by >= --pop-diff in pooled alt
+    frequency, each with >= 2 x --min-depth pooled reads, and (when the higher
+    population has >= 2 oysters) >= 2 of its oysters carry the alt, so one odd
+    animal or a sequencing error can't make a population-level difference."""
+    for x, y in itertools.combinations(compare, 2):
+        fx = pop_pooled(counts, alt, x, 2 * a.min_depth)
+        fy = pop_pooled(counts, alt, y, 2 * a.min_depth)
+        if fx is None or fy is None or abs(fx - fy) < a.pop_diff:
+            continue
+        hi = x if fx > fy else y
+        members = [s for s in samples if pop_of[s] == hi]
+        carriers = sum(1 for s in members if freqs[s][1] is not None and freqs[s][1] >= a.min_alt)
+        if len(members) < 2 or carriers >= 2:
+            return True
+    return False
 
 
 # ---- variant sites ----------------------------------------------------------------
@@ -109,23 +138,24 @@ for off, rb in enumerate(ref):
     for s, c in counts.items():
         n = sum(c.values())
         freqs[s] = (n, c[alt] / n if n else None)
-    if not any(n >= a.min_depth and f >= a.min_alt for n, f in freqs.values() if f is not None):
+    means = {pop: pop_pooled(counts, alt, pop, a.min_depth) for pop in pops}
+    # Keep a site if one oyster, or one population's pooled reads, carries the alt.
+    if not (any(n >= a.min_depth and f >= a.min_alt for n, f in freqs.values() if f is not None)
+            or any(m is not None and m >= a.min_alt for m in means.values())):
         continue
-    means = {pop: pop_mean(freqs, pop) for pop in pops}
-    diffs = [abs(means[x] - means[y]) for x, y in itertools.combinations(pops, 2)
-             if means[x] is not None and means[y] is not None]
     variant_rows.append({
         "pos": pos, "ref": rb, "alt": alt,
         "in_target": a.target_start <= pos <= a.target_end,
         "n_oysters_with_alt": sum(1 for n, f in freqs.values() if f and n >= a.min_depth and f >= a.min_alt),
-        **{f"mean_alt_{pop}": "" if means[pop] is None else round(means[pop], 3) for pop in pops},
-        "pop_differentiated": bool(diffs) and max(diffs) >= a.pop_diff,
+        **{f"alt_freq_{pop}": "" if means[pop] is None else round(means[pop], 3) for pop in pops},
+        "pop_differentiated": differentiated(counts, freqs, alt),
+        "cpg_destroying": (rb, alt) in (("C", "T"), ("G", "A")),
         **{s: "" if f is None else f"{f:.2f}/{n}" for s, (n, f) in freqs.items()},
     })
 
 with open(f"{a.workdir}/variant_sites.tsv", "w", newline="") as fh:
     cols = ["pos", "ref", "alt", "in_target", "n_oysters_with_alt"] + \
-           [f"mean_alt_{pop}" for pop in pops] + ["pop_differentiated"] + samples
+           [f"alt_freq_{pop}" for pop in pops] + ["pop_differentiated", "cpg_destroying"] + samples
     w = csv.DictWriter(fh, fieldnames=cols, delimiter="\t")
     w.writeheader()
     w.writerows(variant_rows)
@@ -165,10 +195,11 @@ shared = [r for r in variant_rows if r["n_oysters_with_alt"] >= 2]
 print(f"Variant sites (alt >= {a.min_alt:.0%} at informative depth >= {a.min_depth} in any oyster): "
       f"{len(variant_rows)}")
 print(f"  seen in >= 2 oysters: {len(shared)}")
-print(f"  differ between populations (mean alt difference >= {a.pop_diff}): {len(diffd)}")
+print(f"  differ between {' vs '.join(compare)} (pooled alt-frequency difference >= {a.pop_diff}): {len(diffd)}"
+      f"  [CpG-destroying: {sum(r['cpg_destroying'] for r in diffd)}]")
 for r in diffd:
     print(f"    {r['pos']} {r['ref']}>{r['alt']}  " +
-          "  ".join(f"{pop}={r[f'mean_alt_{pop}']}" for pop in pops))
+          "  ".join(f"{pop}={r[f'alt_freq_{pop}']}" for pop in pops))
 print(f"\n{len(cpgs)} CpGs in target")
 print(f"{'sample':8} {'pop':4} {'meth%':>6} {'calls':>6} {'CtoT_snp':>8} {'depth':>6}")
 for r in cpg_rows:
