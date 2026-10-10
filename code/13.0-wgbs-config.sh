@@ -6,15 +6,39 @@
 RAW_DIR="/mmfs1/gscratch/scrubbed/sr320/chil-wgbs"   # 15 x paired 2x151 FASTQs
 SAMPLES="data/13-wgbs-samples.tsv"                  # explicit sample -> population table
 
-# Same reference + annotation as the current RNA-seq pipeline (09), so DMRs and
-# DE genes share coordinates. Sequence names (Chromosome_1A ...) match the GFF.
+# Reference, chosen with WGBS_REF (default "merged"):
+#   merged  merged_out.fasta + GN.gene.gff3, the same reference as the RNA-seq
+#           (09), so DMRs and DE genes share coordinates. It is HapA's
+#           chromosomes 2A/4A/6A/10A plus HapB's 1B/5B/6B/7B/8B/9B.
+#   hapa    Och_HapA_assembly.fa alone (no annotation), to test whether results
+#           depend on the mixed reference. Separate genome folder and outputs:
+#           WGBS_REF=hapa bash code/13-wgbs-submit.sh
+# GENOME_FILES lists "url<TAB>filename" pairs that 13.1 downloads.
 GANNET="https://gannet.fish.washington.edu/v1_web/owlshell/bu-github/project-ostrea-chil/data"
-GENOME_DIR="data/13-wgbs-genome"                    # Bismark wants a folder, not a file
-GENOME_FA="${GENOME_DIR}/merged_out.fasta"
-GFF="${GENOME_DIR}/GN.gene.gff3"
+WGBS_REF="${WGBS_REF:-merged}"
+case "${WGBS_REF}" in
+  merged)
+    GENOME_DIR="data/13-wgbs-genome"                # Bismark wants a folder, not a file
+    GENOME_FA="${GENOME_DIR}/merged_out.fasta"
+    GFF="${GENOME_DIR}/GN.gene.gff3"
+    GENOME_FILES="${GANNET}/merged_out.fasta	merged_out.fasta
+${GANNET}/GN.gene.gff3	GN.gene.gff3"
+    OUT="output/13-wgbs"
+    ;;
+  hapa)
+    GENOME_DIR="data/13-wgbs-genome-hapa"
+    GENOME_FA="${GENOME_DIR}/Och_HapA_assembly.fa"
+    GFF=""                                          # no annotation on HapA coordinates
+    GENOME_FILES="https://gannet.fish.washington.edu/v1_web/owlshell/bu-github/OCEAN/docs/jbrowse/data/HapA/Och_HapA_assembly.fa	Och_HapA_assembly.fa"
+    OUT="output/13-wgbs-hapa"
+    ;;
+  *)
+    echo "ERROR: WGBS_REF must be merged or hapa, not ${WGBS_REF}" >&2
+    exit 1
+    ;;
+esac
 
 # ---- outputs ----------------------------------------------------------------
-OUT="output/13-wgbs"
 LOGS="${OUT}/logs"
 
 # ---- parameters -------------------------------------------------------------

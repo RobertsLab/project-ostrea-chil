@@ -14,12 +14,16 @@ n=$(( $(wc -l < "${SAMPLES}") - 1 ))
 array="1-${n}%${ALIGN_CONCURRENCY}"
 [[ "${1:-}" == "--test" ]] && array="1"
 
-where=(--account="${SLURM_ACCOUNT}" --partition="${SLURM_PARTITION}")
-prep=$(sbatch --parsable "${where[@]}" code/13.1-wgbs-genome-prep.sh)
-align=$(sbatch --parsable "${where[@]}" --dependency=afterok:"${prep}" --array="${array}" code/13.2-wgbs-trim-align.sh)
-summ=$(sbatch --parsable "${where[@]}" --dependency=afterok:"${align}" code/13.3-wgbs-qc-summary.sh)
+# --export=ALL carries WGBS_REF into the jobs; --output follows ${OUT}, so a
+# hapa run logs to output/13-wgbs-hapa/logs rather than the #SBATCH default.
+where=(--account="${SLURM_ACCOUNT}" --partition="${SLURM_PARTITION}" --export=ALL,WGBS_REF="${WGBS_REF}")
+prep=$(sbatch --parsable "${where[@]}" --output="${LOGS}/%x_%j.out" code/13.1-wgbs-genome-prep.sh)
+align=$(sbatch --parsable "${where[@]}" --output="${LOGS}/%x_%A_%a.out" \
+          --dependency=afterok:"${prep}" --array="${array}" code/13.2-wgbs-trim-align.sh)
+summ=$(sbatch --parsable "${where[@]}" --output="${LOGS}/%x_%j.out" \
+          --dependency=afterok:"${align}" code/13.3-wgbs-qc-summary.sh)
 
-echo "Submitting to ${SLURM_ACCOUNT} / ${SLURM_PARTITION}"
+echo "Submitting to ${SLURM_ACCOUNT} / ${SLURM_PARTITION}, reference ${WGBS_REF} -> ${OUT}"
 echo "13.1 genome prep   ${prep}"
 echo "13.2 align array   ${align} (tasks ${array})"
 echo "13.3 summary       ${summ}"
