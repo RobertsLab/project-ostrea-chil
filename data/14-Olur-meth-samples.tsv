@@ -1,0 +1,8 @@
+# O. lurida per-CpG methylation calls, one row per oyster.
+# cov_file: Bismark coverage format (chr, start, end, pct, n_meth, n_unmeth), strand-merged
+#   (coverage2cytosine --merge_CpG) preferred. Coordinates MUST match the genome/GFF in
+#   data/14-species.tsv. Paths are relative to the repository root.
+# assay: WGBS, MBD-BS, RRBS, or ONT. Non-WGBS assays bias absolute levels (see 14.2).
+# Leave the table empty to run 14.2 in genome-only
+# (CpG o/e) mode for this species.
+sample	group	assay	cov_file

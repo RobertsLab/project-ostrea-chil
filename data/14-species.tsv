@@ -1,0 +1,3 @@
+species	label	genome_fa	gff	meth_samples
+Och	Ostrea chilensis	data/13-wgbs-genome/merged_out.fasta	data/13-wgbs-genome/GN.gene.gff3	data/14-Och-meth-samples.tsv
+Olur	Ostrea lurida	data/14-Olur-genome/Olur-genome.fa	data/14-Olur-genome/Olur-genome.gff3	data/14-Olur-meth-samples.tsv

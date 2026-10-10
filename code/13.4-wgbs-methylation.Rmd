@@ -8,7 +8,14 @@ date: "2026-10-08"
 ---
 
 Population differences in CpG methylation in *Ostrea chilensis*, from whole-genome
-bisulfite sequencing of 15 oysters (5 each from Pumalin, Quilhua, and Rio Pudeto).
+bisulfite sequencing of oysters from Pumalin, Quilhua, and Rio Pudeto.
+
+**Sample set.** 15 libraries were delivered (5 per site), but several FASTQ pairs
+share reads with others (`output/13-wgbs/raw_read_overlap.tsv`; see README Known
+issues). After removing duplicates, `data/13-wgbs-samples.tsv` holds 9 independent
+oysters: Pum1, Qui1-4, Rio1-4. Only populations with at least `min_pop_n` oysters
+are tested, so Pumalin (n = 1) is left out of this notebook until its libraries are
+re-delivered; the contrasts below are built from whichever populations remain.
 
 **Upstream:** `code/13-wgbs-submit.sh` (13.1 genome prep → 13.2 trim/align/extract
 → 13.3 QC summary) must be finished. This notebook reads the strand-merged CpG
@@ -44,6 +51,8 @@ library(rtracklayer)
 library(limma)
 library(pheatmap)
 library(tidyverse)
+# tidyverse is loaded last, so it masks methylKit::unite (tidyr), and the range
+# versions of reduce (purrr) and setdiff (dplyr/lubridate); those calls are namespaced.
 ```
 
 ```{r parameters}
@@ -54,7 +63,9 @@ dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 min_cov        <- 5      # per-CpG minimum (strand-merged); 10 is typical but costs most sites here
 max_cov_pctl   <- 99.9   # drop PCR/repeat pile-ups
-min_per_group  <- 4L     # CpG must pass in >= 4 of 5 oysters in every population
+snp_mask       <- "../output/13-wgbs/13.7-snps/wgbs_snps.q20.CpG.bed"   # from 13.7; skipped if absent
+min_pop_n      <- 3L     # populations with fewer oysters are not tested
+min_per_group  <- 3L     # CpG must pass in >= 3 oysters (of 4) in every population
 tile_size      <- 1000   # bp, non-overlapping windows for DMRs
 tile_min_cpgs  <- 5      # CpGs required per tile per sample
 min_gene_cpgs  <- 5      # CpGs required per gene for gene-body methylation
@@ -69,13 +80,21 @@ Groups come from the explicit table `data/13-wgbs-samples.tsv`, never from file
 order, so a re-sorted directory can't silently swap populations.
 
 ```{r samples}
-samples <- read_tsv("../data/13-wgbs-samples.tsv", show_col_types = FALSE) %>%
-  mutate(population = factor(population, levels = c("Pum", "Qui", "Rio")),
-         treatment  = as.integer(population) - 1L,          # 0/1/2 for methylKit
+samples_all <- read_tsv("../data/13-wgbs-samples.tsv", show_col_types = FALSE)
+pop_n <- count(samples_all, population)
+untested <- filter(pop_n, n < min_pop_n)
+if (nrow(untested) > 0)
+  message("Not tested (fewer than ", min_pop_n, " oysters): ",
+          paste0(untested$population, " (n = ", untested$n, ")", collapse = ", "))
+
+samples <- samples_all %>%
+  filter(!population %in% untested$population) %>%
+  mutate(population = factor(population, levels = intersect(c("Pum", "Qui", "Rio"), population)),
+         treatment  = as.integer(population) - 1L,          # 0, 1, ... for methylKit
          file       = file.path(meth_dir,
                                 paste0(sample, ".CpG_report.merged_CpG_evidence.cov.gz")))
 
-stopifnot(all(file.exists(samples$file)))
+stopifnot(all(file.exists(samples$file)), nlevels(samples$population) >= 2)
 samples %>% select(sample, population, site)
 ```
 
@@ -87,7 +106,7 @@ above ~1%.
 
 ```{r align-qc}
 aln <- read_tsv("../output/13-wgbs/alignment_summary.tsv", show_col_types = FALSE) %>%
-  left_join(select(samples, sample, population), by = "sample")
+  inner_join(select(samples_all, sample, population), by = "sample")   # clean samples only
 aln
 
 aln %>%
@@ -113,6 +132,34 @@ meth_raw <- methRead(
   context   = "CpG",
   mincov    = 1
 )
+```
+
+## Mask CpG SNPs
+
+A C->T SNP at a CpG (G->A on the other strand) reads as an unmethylated CpG, so a
+SNP that differs in frequency between populations can look like a methylation
+difference. CpGs where either base carries a SNP called from these same bisulfite
+BAMs (`13.7-wgbs-snps.sh`, QUAL >= 20) are removed from every sample before any
+filtering or testing. Strand-merged calls sit at the C of the CpG, so each site
+spans `start` to `start + 1`.
+
+```{r snp-mask}
+if (file.exists(snp_mask)) {
+  mask <- import(snp_mask, format = "bed")
+  n_before <- map_int(meth_raw, ~ nrow(getData(.x)))
+  meth_raw <- methylRawList(
+    map(meth_raw, function(x) {
+      d <- getData(x)
+      hit <- overlapsAny(GRanges(d$chr, IRanges(d$start, d$start + 1)), mask)
+      methylKit::select(x, which(!hit))
+    }),
+    treatment = samples$treatment)
+  n_after <- map_int(meth_raw, ~ nrow(getData(.x)))
+  tibble(sample = samples$sample, cpgs = n_before, masked = n_before - n_after,
+         pct_masked = round(100 * (n_before - n_after) / n_before, 3))
+} else {
+  warning("No SNP mask at ", snp_mask, " - CpG SNPs are NOT removed. Run 13.7 first.")
+}
 ```
 
 ```{r coverage-stats, fig.height=8}
@@ -143,9 +190,9 @@ ggplot(left_join(cov_summary, samples, by = "sample"),
 meth_filt <- filterByCoverage(meth_raw, lo.count = min_cov, hi.perc = max_cov_pctl)
 meth_norm <- normalizeCoverage(meth_filt, method = "median")
 
-meth_unite <- unite(meth_norm, destrand = FALSE,
-                    min.per.group = min_per_group, mc.cores = cores)
-message(nrow(meth_unite), " CpGs pass in >= ", min_per_group, "/5 oysters per population")
+meth_unite <- methylKit::unite(meth_norm, destrand = FALSE,
+                               min.per.group = min_per_group, mc.cores = cores)
+message(nrow(meth_unite), " CpGs pass in >= ", min_per_group, " oysters per population")
 
 pm <- percMethylation(meth_unite)          # CpG x sample, NAs where a sample was filtered
 ```
@@ -167,7 +214,7 @@ as_tibble(pm) %>%
 
 ## Sample structure
 
-PCA on CpGs covered in all 15 samples, using the most variable sites.
+PCA on CpGs covered in every tested oyster, using the most variable sites.
 
 ```{r pca}
 pm_complete <- pm[complete.cases(pm), ]
@@ -205,12 +252,12 @@ seqinfo(gff) <- si                                            # lengths needed f
 
 genes <- gff[gff$type == "gene"]
 names(genes) <- genes$ID
-exons     <- reduce(gff[gff$type == "exon"], ignore.strand = TRUE)
-introns   <- setdiff(reduce(genes, ignore.strand = TRUE), exons)
-promoters <- setdiff(reduce(trim(promoters(genes, upstream = 2000, downstream = 0)),
-                            ignore.strand = TRUE),
-                     reduce(genes, ignore.strand = TRUE))
-intergenic <- gaps(reduce(c(granges(genes), granges(promoters)), ignore.strand = TRUE))
+exons     <- IRanges::reduce(gff[gff$type == "exon"], ignore.strand = TRUE)
+introns   <- BiocGenerics::setdiff(IRanges::reduce(genes, ignore.strand = TRUE), exons)
+upstream  <- trim(promoters(genes, upstream = 2000, downstream = 0))
+promoters <- BiocGenerics::setdiff(IRanges::reduce(upstream, ignore.strand = TRUE),
+                                   IRanges::reduce(genes, ignore.strand = TRUE))
+intergenic <- gaps(IRanges::reduce(c(granges(genes), granges(promoters)), ignore.strand = TRUE))
 intergenic <- intergenic[strand(intergenic) == "*"]
 
 feature_sets <- list(exon = exons, intron = introns,
@@ -240,13 +287,14 @@ table(cpg_gr$feature)
 
 # Differential methylation
 
-All three pairwise contrasts, matching the RNA-seq convention (`Pum_vs_Qui`,
-`Pum_vs_Rio`, `Qui_vs_Rio`). Positive `meth.diff` = higher in the second population.
+Every pairwise contrast among the tested populations, named as in the RNA-seq DE
+(`Pum_vs_Qui`, `Pum_vs_Rio`, `Qui_vs_Rio`). Positive `meth.diff` = higher in the
+second population.
 
 ```{r contrasts}
-contrasts <- list(Pum_vs_Qui = c("Pum", "Qui"),
-                  Pum_vs_Rio = c("Pum", "Rio"),
-                  Qui_vs_Rio = c("Qui", "Rio"))
+pairs <- combn(levels(samples$population), 2, simplify = FALSE)
+contrasts <- set_names(pairs, map_chr(pairs, paste, collapse = "_vs_"))
+names(contrasts)
 
 # methylKit's binomial test with overdispersion correction, on a 2-population subset.
 run_pair <- function(obj, groups) {
@@ -286,9 +334,11 @@ this depth.
 ```{r dmr}
 tiles <- tileMethylCounts(meth_norm, win.size = tile_size, step.size = tile_size,
                           cov.bases = tile_min_cpgs, mc.cores = cores)
-tiles_unite <- unite(tiles, destrand = FALSE, min.per.group = min_per_group,
-                     mc.cores = cores)
+tiles_unite <- methylKit::unite(tiles, destrand = FALSE, min.per.group = min_per_group,
+                                mc.cores = cores)
 message(nrow(tiles_unite), " tiles tested")
+# Tested tiles = the background for DMR gene-set tests (13.8).
+export.bed(as(tiles_unite, "GRanges"), file.path(out_dir, "tiles_tested.bed"))
 
 dmr <- imap(contrasts, function(g, name) {
   d <- run_pair(tiles_unite, g)
@@ -299,9 +349,9 @@ dmr_summary <- imap_dfr(dmr, ~ tibble(contrast = .y,
                                       n_dmr = length(.x),
                                       hyper = sum(.x$meth.diff > 0),
                                       hypo  = sum(.x$meth.diff < 0))) %>%
-  left_join(imap_dfr(dmr, ~ as_tibble(table(.x$feature)) %>%
+  left_join(imap_dfr(dmr, ~ as_tibble(table(feature = .x$feature)) %>%
                        mutate(contrast = .y)) %>%
-              pivot_wider(names_from = Var1, values_from = n),
+              pivot_wider(names_from = feature, values_from = n),
             by = "contrast")
 write_tsv(dmr_summary, file.path(out_dir, "DMR_summary.tsv"))
 dmr_summary
@@ -346,15 +396,16 @@ tibble(mean_pct = rowMeans(100 * gene_frac)) %>%
 ```{r gene-body-limma}
 group  <- samples$population[match(colnames(gene_M), samples$sample)]
 design <- model.matrix(~ 0 + group); colnames(design) <- levels(group)
-cm <- makeContrasts(Pum_vs_Qui = Qui - Pum,
-                    Pum_vs_Rio = Rio - Pum,
-                    Qui_vs_Rio = Rio - Qui,
+cm <- makeContrasts(contrasts = map_chr(contrasts, ~ paste(.x[2], "-", .x[1])),
                     levels = design)
+colnames(cm) <- names(contrasts)
 
 fit <- eBayes(contrasts.fit(lmFit(gene_M, design), cm), trend = TRUE)
 
-# Omnibus: any difference among the three populations.
-any_pop <- topTable(fit, number = Inf, sort.by = "F") %>%
+# Omnibus: any difference among the tested populations (with two populations
+# this is just their single contrast).
+any_pop <- topTable(fit, coef = if (ncol(cm) == 1) 1 else NULL, number = Inf,
+                    sort.by = if (ncol(cm) == 1) "P" else "F") %>%
   as_tibble(rownames = "gene_id")
 write_tsv(any_pop, file.path(out_dir, "DMG_any_population_F.tsv"))
 
@@ -385,9 +436,10 @@ if (length(sig) >= 2) {
   merge) and test whether gene-body methylation level or change predicts expression.
   Note the RNA-seq oysters are different individuals from the WGBS oysters, so this
   is a population-level, not individual-level, comparison.
-- **Genetic confounding:** C→T SNPs read as unmethylated CpGs. Population-specific
-  SNPs can create apparent DMLs. If many DMLs are near 0 vs 100%, call SNPs from
-  the bisulfite BAMs (e.g. BS-SNPer / Biscuit) and drop CpGs overlapping C/T or G/A variants.
+- **Genetic confounding:** CpG SNPs from 13.7 are masked above, but at ~6-9x per
+  oyster many SNPs (especially rare ones) go uncalled, so a call with no SNP is not
+  proof of a clean site. Calls that are near 0% in one population and 100% in the
+  other remain the ones to check.
 - **Functional enrichment:** GO enrichment of DMGs against the background of all
   tested genes (`any_pop$gene_id`), using `SPannot-GO.tsv` via the `03` join.
 

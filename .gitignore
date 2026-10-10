@@ -18,3 +18,10 @@ output/13-wgbs/bismark/
 output/13-wgbs/dedup/
 output/13-wgbs/methylation/
 output/13-wgbs/methylkit_db/
+
+# 13-wgbs re-run on Och_HapA (WGBS_REF=hapa)
+data/13-wgbs-genome-hapa/
+output/13-wgbs-hapa/trimmed/
+output/13-wgbs-hapa/bismark/
+output/13-wgbs-hapa/dedup/
+output/13-wgbs-hapa/methylation/

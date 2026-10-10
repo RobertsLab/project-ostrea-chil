@@ -4,7 +4,9 @@
 #SBATCH --partition=cpu-g2-mem2x
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=128G
-#SBATCH --time=72:00:00
+#SBATCH --time=8:00:00
+# Samples take 1.5-2.2 h. A short limit matters: SLURM won't start a task whose
+# limit would run into a maintenance reservation, so 72 h held tasks for days.
 #SBATCH --array=1-15%5
 #SBATCH --output=output/13-wgbs/logs/%x_%A_%a.out
 
@@ -30,9 +32,24 @@ echo "[$(date)] ${sample} (${population}/${site})"
 
 TRIM="${OUT}/trimmed";  ALN="${OUT}/bismark";  DEDUP="${OUT}/dedup"
 METH="${OUT}/methylation";  QC="${OUT}/fastp"
-mkdir -p "${TRIM}" "${ALN}" "${DEDUP}" "${METH}" "${QC}"
+mkdir -p "${TRIM}" "${ALN}" "${DEDUP}" "${METH}" "${QC}" "${LOGS}"
+
+# One job per sample at a time: two runs of the same sample write identically
+# named Bismark temp files into ${ALN} and clobber each other. mkdir is atomic
+# on GPFS across nodes; a lock left by a killed job is cleared if that job is gone.
+lock="${LOGS}/${sample}.lock"
+if ! mkdir "${lock}" 2>/dev/null; then
+  holder=$(cat "${lock}/job" 2>/dev/null || true)
+  if [[ -n "${holder}" ]] && squeue -h -j "${holder}" 2>/dev/null | grep -q .; then
+    echo "ERROR: ${sample} is already being processed by job ${holder}" >&2
+    exit 1
+  fi
+  echo "Clearing stale lock from job ${holder:-unknown}"
+fi
+echo "${SLURM_JOB_ID:-$$}" > "${lock}/job"
+
 TMP="${TMPDIR:-/tmp}/13-wgbs-${sample}-$$"
-mkdir -p "${TMP}"; trap 'rm -rf "${TMP}"' EXIT
+mkdir -p "${TMP}"; trap 'rm -rf "${TMP}" "${lock}"' EXIT
 
 # ---- 1. trim ------------------------------------------------------------------
 t1="${TRIM}/${sample}_R1.fq.gz";  t2="${TRIM}/${sample}_R2.fq.gz"
@@ -52,15 +69,19 @@ fi
 # ---- 2. align -----------------------------------------------------------------
 # Directional PE: each --parallel instance runs 2 bowtie2 processes x -p threads,
 # so --parallel 8 -p 2 uses ~32 cores.
+# Bismark refuses --basename with --parallel, so outputs get its default R1-derived
+# names; rename them to ${sample}_pe.bam / ${sample}_PE_report.txt, which dedup,
+# 13.3 (bismark2report/bismark2summary) and the report parsing all expect.
 if [[ ! -s "${bam}" ]]; then
   bismark \
     --genome "${GENOME_DIR}" \
     -1 "${t1}" -2 "${t2}" \
-    --basename "${sample}" \
     --score_min "${SCORE_MIN}" \
     --parallel 8 -p 2 \
     --temp_dir "${TMP}" \
     --output_dir "${ALN}"
+  mv "${ALN}/${sample}_R1_bismark_bt2_PE_report.txt" "${ALN}/${sample}_PE_report.txt"
+  mv "${ALN}/${sample}_R1_bismark_bt2_pe.bam" "${bam}"
   rm -f "${t1}" "${t2}"   # trimmed reads are re-creatable from raw; ~5 GB each
 fi
 
@@ -78,6 +99,7 @@ cov="${METH}/${sample}_pe.deduplicated.bismark.cov.gz"
 if [[ ! -s "${cov}" ]]; then
   bismark_methylation_extractor \
     --paired-end --no_overlap \
+    --ignore_r2 "${IGNORE_R2}" \
     --comprehensive --merge_non_CpG \
     --bedGraph --gzip \
     --parallel 8 --buffer_size 40G \

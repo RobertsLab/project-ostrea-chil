@@ -1,16 +1,10 @@
 sample	population	site	r1	r2
 Pum1	Pum	Pumalin	PUM1 (paired)_R1.fastq.gz	PUM1 (paired)_R2.fastq.gz
-Pum2	Pum	Pumalin	PUM2 (paired)_R1.fastq.gz	PUM2 (paired)_R2.fastq.gz
-Pum3	Pum	Pumalin	PUM3 (paired)_R1.fastq.gz	PUM3 (paired)_R2.fastq.gz
-Pum4	Pum	Pumalin	PUM4 (paired)_R1.fastq.gz	PUM4 (paired)_R2.fastq.gz
-Pum5	Pum	Pumalin	PUM5 (paired)_R1.fastq.gz	PUM5 (paired)_R2.fastq.gz
 Qui1	Qui	Quilhua	Qui1 (paired)_R1.fastq.gz	Qui1 (paired)_R2.fastq.gz
 Qui2	Qui	Quilhua	Qui2 (paired)_R1.fastq.gz	Qui2 (paired)_R2.fastq.gz
 Qui3	Qui	Quilhua	Qui3 (paired)_R1.fastq.gz	Qui3 (paired)_R2.fastq.gz
 Qui4	Qui	Quilhua	Qui4 (paired)_R1.fastq.gz	Qui4 (paired)_R2.fastq.gz
-Qui5	Qui	Quilhua	Qui5 (paired)_R1.fastq.gz	Qui5 (paired)_R2.fastq.gz
 Rio1	Rio	Rio_Pudeto	RP1 (paired)_R1.fastq.gz	RP1 (paired)_R2.fastq.gz
 Rio2	Rio	Rio_Pudeto	RP2 (paired)_R1.fastq.gz	RP2 (paired)_R2.fastq.gz
 Rio3	Rio	Rio_Pudeto	RP3 (paired)_R1.fastq.gz	RP3 (paired)_R2.fastq.gz
 Rio4	Rio	Rio_Pudeto	RP4 (paired)_R1.fastq.gz	RP4 (paired)_R2.fastq.gz
-Rio5	Rio	Rio_Pudeto	RP5 (paired)_R1.fastq.gz	RP5 (paired)_R2.fastq.gz
