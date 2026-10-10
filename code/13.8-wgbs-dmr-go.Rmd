@@ -5,6 +5,8 @@ output:
     toc: true
     toc_float: true
 date: "2026-10-10"
+params:
+  dmr_class: "all"   # or a 13.9 class, e.g. "no genetic signal"
 ---
 
 Are genes near population differentially methylated regions (DMRs) enriched for
@@ -34,7 +36,17 @@ paralogs that share a hit (and often sit in the same DMR) count as independent g
 and can make one locus look like an enriched term; check the `genes` column. Treat
 individual terms as leads, not results.
 
-**Upstream:** `13.4` (with `tiles_tested.bed`) and `13.5`. Paths are relative to
+**Restricting to clean DMRs.** Render with `params = list(dmr_class = "no genetic
+signal")` to keep only DMRs that the `13.9` bisulfite SNP check found free of
+population-differentiated variants, CpG-destroying SNPs and repeat signal. Other
+classes (`untested`, `repeat-like`, `genetic: CpG-destroying`, `genetic: other`) work
+the same way. Results then go to `13.8-dmr-go.<class>/` so the all-DMR run is kept.
+The background is unchanged (all genes on tested tiles); since a DMR can only be
+classed clean where every oyster has enough depth to test for SNPs, the clean set
+leans toward well-covered regions, which the background does not.
+
+**Upstream:** `13.4` (with `tiles_tested.bed`) and `13.5`; `13.9` when `dmr_class`
+is set. Paths are relative to
 `code/`, like the other notebooks; runs in the lab R container.
 
 ```{r setup, include=FALSE}
@@ -54,7 +66,11 @@ library(tidyverse)
 dm_dir      <- "../output/13-wgbs/13.4-methylation"
 annot_file  <- "../output/13-wgbs/13.5-gene-annotation/GN_gene_annotation.tsv"
 genome_dir  <- "../data/13-wgbs-genome"
-out_dir     <- "../output/13-wgbs/13.8-dmr-go"
+snp_dir     <- "../output/13-wgbs/13.9-bs-snp-check"   # batch_DMR_<contrast>.tsv
+dmr_class   <- params$dmr_class                         # "all" = no 13.9 filter
+out_dir     <- paste0("../output/13-wgbs/13.8-dmr-go",
+                      if (dmr_class == "all") "" else
+                        paste0(".", gsub("[^A-Za-z0-9]+", "-", dmr_class)))
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 promoter_bp <- 2000
@@ -89,6 +105,22 @@ dmr_files <- list.files(dm_dir, pattern = "^DMR_.*_vs_.*\\.tsv$", full.names = T
 dmrs <- set_names(map(dmr_files, read_dm),
                   sub("^DMR_(.*)\\.tsv$", "\\1", basename(dmr_files)))
 tiles <- import(file.path(dm_dir, "tiles_tested.bed"))
+
+# 13.9 class per DMR (matched on coordinates), and the optional class filter.
+dmrs <- imap(dmrs, function(d, cn) {
+  f <- file.path(snp_dir, paste0("batch_DMR_", cn, ".tsv"))
+  if (!file.exists(f)) {
+    if (dmr_class != "all") stop("dmr_class is set but ", f, " is missing; run 13.9 first")
+    d$snp_class <- NA_character_
+    return(d)
+  }
+  cls <- read_tsv(f, show_col_types = FALSE) %>%
+    transmute(key = paste(seqnames, start, end), class)
+  d$snp_class <- cls$class[match(paste(seqnames(d), start(d), end(d)), cls$key)]
+  stopifnot(!anyNA(d$snp_class))      # 13.9 must have been run on these DMRs
+  if (dmr_class == "all") d else d[d$snp_class == dmr_class]
+})
+message("DMR class filter: ", dmr_class)
 
 map_int(dmrs, length)
 length(tiles)
@@ -223,12 +255,13 @@ dmr_gene_tbl <- imap_dfr(dmrs, function(d, cn) {
   tibble(contrast = cn, gene_id = names(genes)[subjectHits(ov)],
          dmr = paste0(seqnames(d), ":", start(d), "-", end(d))[queryHits(ov)],
          meth_diff = d$meth.diff[queryHits(ov)],
-         dmr_feature = as.character(d$feature[queryHits(ov)]))
+         dmr_feature = as.character(d$feature[queryHits(ov)]),
+         snp_class = d$snp_class[queryHits(ov)])
 }) %>%
   left_join(select(annot, gene_id, entry_name, protein_name, evalue), by = "gene_id") %>%
   arrange(contrast, desc(abs(meth_diff)))
 write_tsv(dmr_gene_tbl, file.path(out_dir, "DMR_genes.tsv"))
-dmr_gene_tbl %>% select(gene_id, meth_diff, dmr_feature, protein_name)
+dmr_gene_tbl %>% select(gene_id, meth_diff, dmr_feature, snp_class, protein_name)
 ```
 
 ```{r session}
