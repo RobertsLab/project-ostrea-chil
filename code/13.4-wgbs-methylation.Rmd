@@ -63,6 +63,7 @@ dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 min_cov        <- 5      # per-CpG minimum (strand-merged); 10 is typical but costs most sites here
 max_cov_pctl   <- 99.9   # drop PCR/repeat pile-ups
+snp_mask       <- "../output/13-wgbs/13.7-snps/wgbs_snps.q20.CpG.bed"   # from 13.7; skipped if absent
 min_pop_n      <- 3L     # populations with fewer oysters are not tested
 min_per_group  <- 3L     # CpG must pass in >= 3 oysters (of 4) in every population
 tile_size      <- 1000   # bp, non-overlapping windows for DMRs
@@ -131,6 +132,34 @@ meth_raw <- methRead(
   context   = "CpG",
   mincov    = 1
 )
+```
+
+## Mask CpG SNPs
+
+A C->T SNP at a CpG (G->A on the other strand) reads as an unmethylated CpG, so a
+SNP that differs in frequency between populations can look like a methylation
+difference. CpGs where either base carries a SNP called from these same bisulfite
+BAMs (`13.7-wgbs-snps.sh`, QUAL >= 20) are removed from every sample before any
+filtering or testing. Strand-merged calls sit at the C of the CpG, so each site
+spans `start` to `start + 1`.
+
+```{r snp-mask}
+if (file.exists(snp_mask)) {
+  mask <- import(snp_mask, format = "bed")
+  n_before <- map_int(meth_raw, ~ nrow(getData(.x)))
+  meth_raw <- methylRawList(
+    map(meth_raw, function(x) {
+      d <- getData(x)
+      hit <- overlapsAny(GRanges(d$chr, IRanges(d$start, d$start + 1)), mask)
+      methylKit::select(x, which(!hit))
+    }),
+    treatment = samples$treatment)
+  n_after <- map_int(meth_raw, ~ nrow(getData(.x)))
+  tibble(sample = samples$sample, cpgs = n_before, masked = n_before - n_after,
+         pct_masked = round(100 * (n_before - n_after) / n_before, 3))
+} else {
+  warning("No SNP mask at ", snp_mask, " - CpG SNPs are NOT removed. Run 13.7 first.")
+}
 ```
 
 ```{r coverage-stats, fig.height=8}
@@ -405,9 +434,10 @@ if (length(sig) >= 2) {
   merge) and test whether gene-body methylation level or change predicts expression.
   Note the RNA-seq oysters are different individuals from the WGBS oysters, so this
   is a population-level, not individual-level, comparison.
-- **Genetic confounding:** C→T SNPs read as unmethylated CpGs. Population-specific
-  SNPs can create apparent DMLs. If many DMLs are near 0 vs 100%, call SNPs from
-  the bisulfite BAMs (e.g. BS-SNPer / Biscuit) and drop CpGs overlapping C/T or G/A variants.
+- **Genetic confounding:** CpG SNPs from 13.7 are masked above, but at ~6-9x per
+  oyster many SNPs (especially rare ones) go uncalled, so a call with no SNP is not
+  proof of a clean site. Calls that are near 0% in one population and 100% in the
+  other remain the ones to check.
 - **Functional enrichment:** GO enrichment of DMGs against the background of all
   tested genes (`any_pop$gene_id`), using `SPannot-GO.tsv` via the `03` join.
 
