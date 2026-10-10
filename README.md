@@ -128,7 +128,8 @@ Committed to the repo:
 |---|---|
 | [data/Och_contigs_proteins.fa](data/Och_contigs_proteins.fa) | 36,163 contigs from a trimmed-read assembly (55 MB). Despite the filename these are **nucleotide** sequences |
 | [data/blast_contig_Och.xlsx](data/blast_contig_Och.xlsx) | BLAST results for those contigs |
-| [output/01-repro-annot/Olur-uniprot_blastp.tab](output/01-repro-annot/Olur-uniprot_blastp.tab) | 27-line blastp excerpt (the only committed pipeline output) |
+| [output/01-repro-annot/Olur-uniprot_blastp.tab](output/01-repro-annot/Olur-uniprot_blastp.tab) | 27-line blastp excerpt |
+| `output/13-wgbs/`, `output/13-wgbs-hapa/`, `output/14-meth-compare/`, `output/15-GN020540-locus/` | Small summary and result tables from the WGBS (13.x), cross-species (14) and GN020540 (15) analyses, each ≤ 1.1 MB (2.2 MB in all): alignment QC, raw-read overlap, DML/DMR/DMG results, landscape summaries, SNP-overlap and SNP-check classes, GO results, HapA comparison, cross-species summaries. Large per-CpG/per-gene tables, BAMs, VCFs and HTML reports stay out of git (backed up to gannet by `bu.sh`) |
 | [reports/CGBIH240109_Genome_Annotation-Report.pdf](reports/CGBIH240109_Genome_Annotation-Report.pdf) | genome annotation report |
 
 **Not** in the repo, and required to run anything: the genome assemblies, the upstream annotation GFF/GTF, the raw ONT FASTQs (read in `02-RNAseq.Rmd` from `/home/shared/16TB_HDD_01/valentina/data/`), the Illumina FASTQs, the Swiss-Prot release, the BLAST/DIAMOND databases, and every `output/` subdirectory — `.gitignore` excludes `output`, `blastdb`, `data/*assembly*`, `data/P*`, and `data/uniprot_sprot_r2024_03.fast*`.

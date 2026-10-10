@@ -1,0 +1,10 @@
+sample	population	merged_mapping_pct	merged_multimap_pct	merged_dup_pct	merged_cpg_meth_pct	merged_cpgs_5x	hapa_mapping_pct	hapa_multimap_pct	hapa_dup_pct	hapa_cpg_meth_pct	hapa_cpgs_5x
+Pum1	Pum	56.0	31.2	6.99	19.4	7929196	65.7	15.5	7.01	19.8	9186527
+Qui1	Qui	57.1	32.4	7.04	18.9	8343110	67.2	16.3	7.01	19.2	9724534
+Qui2	Qui	57.0	31.9	6.38	21.6	7173703	66.9	16.0	6.40	22.0	8319792
+Qui3	Qui	57.4	32.0	7.12	20.5	8439281	67.4	16.0	7.12	20.9	9727282
+Qui4	Qui	57.3	32.5	5.30	19.3	7274162	67.3	16.5	5.30	19.6	8524265
+Rio1	Rio	58.5	31.3	6.42	20.3	8979293	68.5	15.1	6.40	20.6	10304235
+Rio2	Rio	57.4	32.0	6.19	20.1	7625150	67.5	15.7	6.18	20.4	8872489
+Rio3	Rio	57.7	32.5	4.82	21.1	6364168	67.9	16.0	4.81	21.5	7516043
+Rio4	Rio	58.0	31.7	5.01	20.5	8636936	68.2	15.3	4.99	20.8	9993777
