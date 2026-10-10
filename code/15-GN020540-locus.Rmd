@@ -1,0 +1,389 @@
+---
+title: "15 - GN020540: a Rio-specific loss of methylation"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+date: "2026-10-10"
+---
+
+GN020540 is the strongest single population difference in `13.4`: the only gene
+with a significant gene-body difference (Qui vs Rio), and covered by seven 1 kb DMRs
+from the promoter to the last exon, all lower in Rio. This notebook looks at the
+locus directly:
+
+1. per-oyster methylation and read depth along the locus;
+2. what the gene is (annotation) and whether it is expressed (ONT RNA-seq, `09`);
+3. SNPs from `13.7` in the region;
+4. the two haplotype assemblies (HapA, HapB) at the locus;
+5. methylation at the other genomic copies of the repeat inside the intron, to tell
+   a locus-specific (cis) change from a repeat-family-wide one.
+
+**Upstream:** `13.2` (strand-merged CpG calls), `13.4`, `13.5` (Swiss-Prot hits),
+`13.7` (SNPs). The haplotype assemblies are downloaded to `data/` if absent (as in
+`12-compare-genomes.py`). RNA-seq BAMs and counts are read from gannet, where `bu.sh`
+backs up `output/09-align-v1-clean/`.
+
+**Samples:** the 9 independent oysters in `data/13-wgbs-samples.tsv` (duplicated
+libraries excluded; see README Known issues).
+
+**Where to run:** a compute node, inside the lab R container (~10 min, 16 cores for
+minimap2). Command-line tools are called by absolute path from the srlab conda envs,
+which run inside the container; paths are relative to `code/`.
+
+**Network.** klone compute nodes have no internet access. The RNA-seq inputs (count
+matrix, per-library read counts from the remote BAMs) and the haplotype assemblies
+are fetched only if not already cached in `out_dir` / `data/`. Run
+`code/15-GN020540-fetch.R` once from a login node (lab R container) to fill the cache
+before knitting on a compute node.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 9, fig.height = 4.5)
+```
+
+```{r packages}
+library(tidyverse)
+```
+
+```{r parameters}
+out_dir  <- "../output/15-GN020540-locus"
+meth_dir <- "../output/13-wgbs/methylation"
+genome   <- "../data/13-wgbs-genome/merged_out.fasta"
+gff_file <- "../data/13-wgbs-genome/GN.gene.gff3"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+gene_id  <- "GN020540"
+chrom    <- "Chromosome_9B"
+view     <- c(7180000, 7260000)   # wide window for depth
+locus    <- c(7215000, 7234000)   # gene +/- ~6 kb
+promoter_bp <- 2000
+
+envs     <- "/mmfs1/gscratch/srlab/sr320/miniforge3/envs"
+minimap2 <- file.path(envs, "myflow/bin/minimap2")
+samtools <- file.path(envs, "wgbs-snp/bin/samtools")
+bcftools <- file.path(envs, "wgbs-snp/bin/bcftools")
+bedtools <- file.path(envs, "wgbs-snp/bin/bedtools")
+threads  <- 16
+
+gannet <- "https://gannet.fish.washington.edu/v1_web/owlshell/bu-github"
+Sys.setenv(MINIMAP2 = minimap2, SAMTOOLS = samtools, BEDTOOLS = bedtools,
+           OUT = out_dir, METH = meth_dir, GENOME = genome, CHROM = chrom,
+           VLO = view[1], VHI = view[2], THREADS = threads)
+```
+
+# Gene model and annotation
+
+```{r gene}
+gff <- read_tsv(gff_file, comment = "#", col_names = FALSE, show_col_types = FALSE)
+gene_rows <- gff %>% filter(str_detect(X9, paste0("(ID|Parent)=", gene_id, "(;|\\.|$)")))
+gene  <- gene_rows %>% filter(X3 == "gene") %>% transmute(start = X4, end = X5, strand = X7)
+exons <- gene_rows %>% filter(X3 == "exon") %>% transmute(start = X4, end = X5)
+gene; exons
+
+# Nearest other genes
+gff %>% filter(X1 == chrom, X3 == "gene", X5 > gene$start - 50000, X4 < gene$end + 50000) %>%
+  transmute(gene = str_extract(X9, "ID=[^;]+"), start = X4, end = X5)
+
+annot <- read_tsv("../output/13-wgbs/13.5-gene-annotation/GN_gene_annotation.tsv",
+                  show_col_types = FALSE)
+annot %>% filter(gene_id == !!gene_id) %>%
+  select(gene_id, entry_name, protein_name, pident, aln_len, qlen, slen, evalue)
+```
+
+The predicted protein (`qlen`) is compared with the full-length Swiss-Prot hit
+(`slen`): a much shorter query means a partial gene model or a gene fragment.
+
+# Methylation and depth per oyster
+
+```{r samples}
+samples <- read_tsv("../data/13-wgbs-samples.tsv", show_col_types = FALSE) %>%
+  select(sample, population)
+writeLines(samples$sample, file.path(out_dir, "samples.txt"))
+```
+
+Per-oyster CpG calls in the wide window, and each oyster's genome-wide mean depth
+per covered CpG (to express local depth relative to the genome).
+
+```{r extract-cpgs, engine='bash'}
+while read -r s; do
+  (
+    f="${METH}/${s}.CpG_report.merged_CpG_evidence.cov.gz"
+    zcat "$f" | awk -F'\t' -v OFS='\t' -v c="$CHROM" -v lo="$VLO" -v hi="$VHI" -v s="$s" \
+      '$1 == c && $2 >= lo && $2 <= hi {print s, $2, $5, $6}' > "${OUT}/cpg_${s}.tsv"
+    zcat "$f" | awk -F'\t' -v s="$s" '{n++; d += $5 + $6} END {print s "\t" d / n}' \
+      > "${OUT}/depth_${s}.tsv"
+  ) &
+done < "${OUT}/samples.txt"
+wait
+cat "${OUT}"/cpg_*.tsv  > "${OUT}/cpg_window.tsv"
+cat "${OUT}"/depth_*.tsv > "${OUT}/genome_depth.tsv"
+wc -l "${OUT}/cpg_window.tsv"
+```
+
+```{r methylation-table}
+cpg <- read_tsv(file.path(out_dir, "cpg_window.tsv"), col_names = c("sample", "pos", "nC", "nT"),
+                show_col_types = FALSE) %>%
+  left_join(samples, by = "sample") %>%
+  mutate(cov = nC + nT)
+gdepth <- read_tsv(file.path(out_dir, "genome_depth.tsv"), col_names = c("sample", "genome_depth"),
+                   show_col_types = FALSE)
+
+region_of <- function(pos) case_when(
+  pos < gene$start - promoter_bp ~ "upstream flank",
+  pos < gene$start ~ "promoter (2 kb)",
+  pos <= gene$end ~ "gene body",
+  TRUE ~ "downstream flank")
+
+by_region <- cpg %>%
+  filter(between(pos, locus[1], locus[2])) %>%
+  mutate(region = factor(region_of(pos), levels = c("upstream flank", "promoter (2 kb)",
+                                                    "gene body", "downstream flank"))) %>%
+  group_by(population, sample, region) %>%
+  summarise(cpgs = n(), meth_pct = 100 * sum(nC) / sum(cov), mean_depth = mean(cov),
+            .groups = "drop") %>%
+  left_join(gdepth, by = "sample") %>%
+  mutate(rel_depth = mean_depth / genome_depth)
+write_tsv(by_region, file.path(out_dir, "methylation_by_region.tsv"))
+
+by_region %>% select(sample, region, meth_pct) %>%
+  pivot_wider(names_from = region, values_from = meth_pct) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 1)))
+```
+
+Per-CpG states in the gene body: are oysters near 0 / 100% (allelic or fixed) or
+intermediate?
+
+```{r cpg-states}
+cpg %>%
+  filter(between(pos, gene$start, gene$end), cov >= 3) %>%
+  mutate(state = cut(100 * nC / cov, c(-1, 20, 80, 100), labels = c("<=20%", "20-80%", ">80%"))) %>%
+  count(population, sample, state) %>%
+  group_by(sample) %>% mutate(frac = round(n / sum(n), 2)) %>% select(-n) %>%
+  pivot_wider(names_from = state, values_from = frac, values_fill = 0)
+```
+
+```{r profile-plot}
+bins <- cpg %>%
+  filter(between(pos, locus[1], locus[2])) %>%
+  mutate(bin = floor(pos / 500) * 500 + 250) %>%
+  group_by(population, sample, bin) %>%
+  summarise(meth = 100 * sum(nC) / sum(cov), cov = sum(cov), .groups = "drop") %>%
+  filter(cov >= 5)
+dmr <- read_tsv("../output/13-wgbs/13.4-methylation/DMR_Qui_vs_Rio.tsv", show_col_types = FALSE) %>%
+  filter(seqnames == chrom, end >= locus[1], start <= locus[2])
+
+p <- ggplot(bins, aes(bin / 1e6, meth, colour = population, group = sample)) +
+  geom_rect(data = dmr, inherit.aes = FALSE,
+            aes(xmin = start / 1e6, xmax = end / 1e6, ymin = -Inf, ymax = Inf),
+            fill = "grey90") +
+  geom_rect(data = exons, inherit.aes = FALSE,
+            aes(xmin = start / 1e6, xmax = end / 1e6, ymin = -8, ymax = -3), fill = "black") +
+  annotate("segment", x = gene$start / 1e6, xend = gene$end / 1e6, y = -5.5, yend = -5.5) +
+  geom_line(alpha = 0.8) + geom_point(size = 0.8) +
+  scale_colour_manual(values = c(Pum = "grey40", Qui = "#1b9e77", Rio = "#d95f02")) +
+  labs(x = paste(chrom, "(Mb)"), y = "CpG methylation (%), 500 bp bins",
+       title = paste(gene_id, "methylation per oyster"),
+       subtitle = "Grey = 13.4 DMR tiles; black = exons") +
+  theme_bw()
+p
+ggsave(file.path(out_dir, paste0(gene_id, "_methylation.png")), p, width = 9, height = 4.5, dpi = 150)
+```
+
+Read depth relative to each oyster's genome-wide mean, in 4 kb bins over the wide
+window. Depth well above 1 in every oyster points to sequence present more than once
+in the genome but once in the assembly; a Rio-only drop would point to a deletion.
+
+```{r depth}
+depth_bins <- cpg %>%
+  mutate(bin_kb = floor(pos / 4000) * 4) %>%
+  group_by(sample, bin_kb) %>%
+  summarise(depth = mean(cov), .groups = "drop") %>%
+  left_join(gdepth, by = "sample") %>%
+  mutate(rel = round(depth / genome_depth, 2)) %>%
+  select(sample, bin_kb, rel) %>%
+  pivot_wider(names_from = bin_kb, values_from = rel)
+write_tsv(depth_bins, file.path(out_dir, "relative_depth_4kb.tsv"))
+depth_bins
+```
+
+# SNPs in the region (13.7)
+
+```{r snps}
+vcf_q20 <- "../output/13-wgbs/13.7-snps/wgbs_snps.q20.vcf.gz"
+vcf_all <- "../output/13-wgbs/13.7-snps/wgbs_snps.all.vcf.gz"
+region  <- sprintf("%s:%d-%d", chrom, locus[1], locus[2])
+q20 <- system2(bcftools, c("view", "-H", "-r", region, vcf_q20), stdout = TRUE)
+all_var <- system2(bcftools, c("query", "-r", region, "-i", "'ALT!=\".\"'", "-f", "'%QUAL\\n'", vcf_all),
+                   stdout = TRUE)
+tibble(region = region, snps_qual20 = length(q20),
+       candidate_variant_sites = length(all_var),
+       max_qual = suppressWarnings(max(as.numeric(all_var))))
+```
+
+# Expression (ONT RNA-seq, 09)
+
+StringTie counts from `09` (current pipeline), and direct read counts at the gene
+from each library's BAM, read remotely through its index. The RNA-seq oysters are
+different individuals from the WGBS oysters.
+
+```{r expression-counts}
+counts_file <- file.path(out_dir, "09_gene_count_matrix.csv")
+if (!file.exists(counts_file))
+  download.file(file.path(gannet, "project-ostrea-chil/output/09-align-v1-clean/stringtie_quant/gene_count_matrix.csv"),
+                counts_file, quiet = TRUE)
+counts <- read_csv(counts_file, show_col_types = FALSE)
+libsize <- colSums(select(counts, -gene_id))
+counts %>% filter(str_detect(gene_id, gene_id)) %>%
+  pivot_longer(-gene_id, names_to = "library", values_to = "count") %>%
+  mutate(cpm = round(1e6 * count / libsize[library], 1))
+
+# How common is "zero in half the libraries" among expressed genes?
+m <- as.matrix(select(counts, -gene_id))
+expressed <- rowSums(m) >= 100
+c(expressed_genes = sum(expressed), zero_in_6_plus = sum(rowSums(m[expressed, ] == 0) >= 6))
+```
+
+```{r expression-bams}
+libs <- setdiff(names(counts), "gene_id")
+bam_url <- function(l) file.path(gannet, "project-ostrea-chil/output/09-align-v1-clean",
+                                 paste0(l, "_combined_clean_porechop.sorted.bam"))
+gene_region <- sprintf("%s:%d-%d", chrom, gene$start, gene$end)
+reads_file <- file.path(out_dir, "rnaseq_reads_at_gene.tsv")
+if (file.exists(reads_file)) {
+  reads <- read_tsv(reads_file, show_col_types = FALSE)
+} else {
+old <- setwd(out_dir)   # samtools caches the remote .bai files in the working directory
+reads <- map_dfr(libs, function(l) {
+  idx <- system2(samtools, c("idxstats", bam_url(l)), stdout = TRUE)
+  mapped <- sum(as.numeric(map_chr(strsplit(idx, "\t"), 3)))
+  n <- as.integer(system2(samtools, c("view", "-c", "-F", "0x904", "-q", "20",
+                                      bam_url(l), gene_region), stdout = TRUE))
+  tibble(library = l, population = substr(l, 1, 3), mapped = mapped, gene_reads = n,
+         per_million = round(1e6 * n / mapped, 1))
+})
+setwd(old)
+write_tsv(reads, reads_file)
+}
+reads
+reads %>% group_by(population) %>% summarise(mean_per_million = mean(per_million))
+```
+
+# Haplotype assemblies
+
+The merged reference's `Chromosome_9B` is HapB's `Chromosome_9B`. The 50 kb around
+the gene, and separately the high-depth intron segment, are aligned to HapA, HapB and
+the merged assembly.
+
+```{r haplotypes-download}
+hap_urls <- c(HapA = file.path(gannet, "OCEAN/docs/jbrowse/data/HapA/Och_HapA_assembly.fa"),
+              HapB = file.path(gannet, "OCEAN/docs/jbrowse/data/HapB/Och_HapB_assembly.fa"))
+hap_files <- c(HapA = "../data/Och_HapA_assembly.fa", HapB = "../data/Och_HapB_assembly.fa")
+for (h in names(hap_files)) {
+  if (!file.exists(hap_files[h])) {
+    download.file(hap_urls[h], paste0(hap_files[h], ".part"), mode = "wb", quiet = TRUE)
+    file.rename(paste0(hap_files[h], ".part"), hap_files[h])
+  }
+}
+file.size(hap_files) / 1e6
+```
+
+```{r haplotypes-align, engine='bash'}
+"$SAMTOOLS" faidx "$GENOME" "${CHROM}:7200000-7250000" > "${OUT}/locus50k.fa"
+"$SAMTOOLS" faidx "$GENOME" "${CHROM}:7222000-7227000" > "${OUT}/intron_segment.fa"
+for t in HapA:../data/Och_HapA_assembly.fa HapB:../data/Och_HapB_assembly.fa merged:"$GENOME"; do
+  n=${t%%:*}; f=${t#*:}
+  [[ -s "${OUT}/locus_vs_${n}.paf" ]] || \
+    "$MINIMAP2" -t "$THREADS" -x asm20 -c --secondary=yes -N 200 -p 0.1 "$f" "${OUT}/locus50k.fa" \
+      > "${OUT}/locus_vs_${n}.paf" 2> /dev/null
+  [[ -s "${OUT}/intron_vs_${n}.paf" ]] || \
+    "$MINIMAP2" -t "$THREADS" -x asm20 -c --secondary=yes -N 500 -p 0.05 "$f" "${OUT}/intron_segment.fa" \
+      > "${OUT}/intron_vs_${n}.paf" 2> /dev/null
+done
+wc -l "${OUT}"/*.paf
+```
+
+```{r haplotypes-summary}
+read_paf <- function(f) {
+  read_tsv(f, col_names = FALSE, show_col_types = FALSE, col_select = 1:13) %>%
+    transmute(qstart = X3, qend = X4, strand = X5, target = X6, tstart = X8, tend = X9,
+              identity = round(X10 / X11, 3), aln_len = X11, mapq = X12,
+              type = str_remove(X13, "tp:A:"))
+}
+offset <- 7200000   # query coordinates are relative to this; gene at q 21,497-27,996
+
+# Primary placement of the 50 kb locus in each haplotype
+map_dfr(c("HapA", "HapB"), ~ read_paf(file.path(out_dir, paste0("locus_vs_", .x, ".paf"))) %>%
+          filter(type == "P") %>% mutate(assembly = .x)) %>%
+  mutate(q = paste0(qstart + offset, "-", qend + offset)) %>%
+  select(assembly, q, strand, target, tstart, tend, identity, aln_len)
+
+# Self-similar blocks upstream of the gene in HapB (tandem repeat array)
+read_paf(file.path(out_dir, "locus_vs_HapB.paf")) %>%
+  filter(type == "S", target == chrom, aln_len >= 5000) %>%
+  arrange(qstart) %>% select(qstart, qend, tstart, tend, identity, aln_len)
+
+# Copies of the intron segment (>= 2 kb aligned)
+map_dfr(c("HapA", "HapB", "merged"), ~ read_paf(file.path(out_dir, paste0("intron_vs_", .x, ".paf"))) %>%
+          filter(aln_len >= 2000) %>%
+          summarise(copies = n(), copies_95pct = sum(identity >= 0.95)) %>% mutate(assembly = .x))
+```
+
+# Other copies of the intronic repeat
+
+If the Rio loss were a property of the repeat family (e.g. genome-wide repeat
+methylation differing by population), the other copies would also be lower in Rio.
+
+```{r repeat-copies, engine='bash'}
+awk -F'\t' -v OFS='\t' -v c="$CHROM" \
+  '$11 >= 2000 && !($6 == c && $8 < 7230000 && $9 > 7215000) {print $6, $8, $9}' \
+  "${OUT}/intron_vs_merged.paf" | sort -k1,1 -k2,2n | "$BEDTOOLS" merge -i - > "${OUT}/repeat_copies.bed"
+cut -f1,2 "${GENOME}.fai" | sort -k1,1 > "${OUT}/genome.sorted.sizes"
+while read -r s; do
+  (
+    zcat "${METH}/${s}.CpG_report.merged_CpG_evidence.cov.gz" \
+      | awk -F'\t' -v OFS='\t' '{print $1, $2 - 1, $2, $5, $6}' \
+      | "$BEDTOOLS" intersect -sorted -g "${OUT}/genome.sorted.sizes" -a - -b "${OUT}/repeat_copies.bed" -wa -wb \
+      | awk -F'\t' -v OFS='\t' -v s="$s" '{print s, $6 ":" $7, $4, $5}' > "${OUT}/repeat_${s}.tsv"
+  ) &
+done < "${OUT}/samples.txt"
+wait
+wc -l < "${OUT}/repeat_copies.bed"
+```
+
+```{r repeat-copies-summary}
+rep <- map_dfr(samples$sample, ~ read_tsv(file.path(out_dir, paste0("repeat_", .x, ".tsv")),
+                                          col_names = c("sample", "copy", "nC", "nT"),
+                                          show_col_types = FALSE)) %>%
+  left_join(samples, by = "sample")
+
+per_copy <- rep %>% group_by(population, sample, copy) %>%
+  summarise(calls = sum(nC + nT), meth = 100 * sum(nC) / calls, .groups = "drop") %>%
+  filter(calls >= 20)
+
+per_copy %>% group_by(population, sample) %>%
+  summarise(copies = n(), mean_per_copy = round(mean(meth), 1),
+            copies_below_10pct = sum(meth < 10), .groups = "drop")
+
+# The GN020540 copy itself, for comparison (intron segment only)
+cpg %>% filter(between(pos, 7222000, 7227000)) %>%
+  group_by(population, sample) %>%
+  summarise(meth_pct = round(100 * sum(nC) / sum(cov), 1), .groups = "drop")
+```
+
+# Summary
+
+- Rio oysters are near-unmethylated across GN020540 (promoter to last exon); Quilhua
+  and Pum1 are partly methylated, with no overlap between the groups.
+- The gene model is a fragment (`qlen` vs `slen` above), and the intron holds a
+  ~4 kb interspersed repeat with hundreds of genomic copies, which explains the
+  doubled read depth and the intermediate methylation there.
+- No confident SNP lies in the region; ONT expression is too sparse to compare.
+- HapA carries an identical copy of the gene; the haplotypes differ by a tandem
+  array just upstream, which short bisulfite reads cannot genotype.
+- Other copies of the intronic repeat are methylated the same in every population,
+  so the Rio loss is specific to this locus.
+
+```{r session}
+sessionInfo()
+```
