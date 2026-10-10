@@ -20,6 +20,9 @@ Writes to --workdir:
                      flag for CpG-destroying changes (C>T at C, G>A at G)
   cpg_summary.tsv    per-oyster methylation over target CpGs (top-strand
                      reads), CpGs with C->T SNP evidence, and read depth
+  cpg_testability.tsv  per target CpG: pooled genotype depth at the C and G in
+                     each --compare population, and whether a SNP could have
+                     been detected there
 and prints a short summary.
 """
 import argparse
@@ -189,6 +192,31 @@ with open(f"{a.workdir}/cpg_summary.tsv", "w", newline="") as fh:
     w.writeheader()
     w.writerows(cpg_rows)
 
+# ---- testability: could a SNP at each target CpG have been seen? ------------------------
+# "No differentiated variant" only means something if there were genotype reads:
+# bottom-strand reads at the C and top-strand reads at the G (the `informative`
+# counts). A CpG is testable when every --compare population has >= 2 x
+# --min-depth pooled genotype reads at both positions, the same depth the
+# differentiation test needs.
+test_rows = []
+for pos in cpgs:
+    row, ok = {"pos": pos}, True
+    for pop in compare:
+        members = [s for s in samples if pop_of[s] == pop]
+        dc = sum(sum(informative[s].get(pos, collections.Counter()).values()) for s in members)
+        dg = sum(sum(informative[s].get(pos + 1, collections.Counter()).values()) for s in members)
+        row[f"geno_depth_C_{pop}"], row[f"geno_depth_G_{pop}"] = dc, dg
+        ok = ok and dc >= 2 * a.min_depth and dg >= 2 * a.min_depth
+    row["testable"] = ok
+    test_rows.append(row)
+
+with open(f"{a.workdir}/cpg_testability.tsv", "w", newline="") as fh:
+    cols = ["pos"] + [f"geno_depth_{b}_{pop}" for pop in compare for b in "CG"] + ["testable"]
+    w = csv.DictWriter(fh, fieldnames=cols, delimiter="\t")
+    w.writeheader()
+    w.writerows(test_rows)
+n_testable = sum(r["testable"] for r in test_rows)
+
 # ---- printed summary ---------------------------------------------------------------------
 diffd = [r for r in variant_rows if r["pop_differentiated"]]
 shared = [r for r in variant_rows if r["n_oysters_with_alt"] >= 2]
@@ -200,7 +228,8 @@ print(f"  differ between {' vs '.join(compare)} (pooled alt-frequency difference
 for r in diffd:
     print(f"    {r['pos']} {r['ref']}>{r['alt']}  " +
           "  ".join(f"{pop}={r[f'alt_freq_{pop}']}" for pop in pops))
-print(f"\n{len(cpgs)} CpGs in target")
+print(f"\n{len(cpgs)} CpGs in target; {n_testable} testable for SNPs "
+      f"(>= {2 * a.min_depth} pooled genotype reads at C and G in each of {', '.join(compare)})")
 print(f"{'sample':8} {'pop':4} {'meth%':>6} {'calls':>6} {'CtoT_snp':>8} {'depth':>6}")
 for r in cpg_rows:
     print(f"{r['sample']:8} {r['population']:4} {r['cpg_meth_pct_top_strand']!s:>6} "

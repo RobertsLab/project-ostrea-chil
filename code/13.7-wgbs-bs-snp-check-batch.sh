@@ -19,7 +19,10 @@
 #   genetic: CpG-destroying     a differentiated C>T at C / G>A at G, which reads
 #                               as lost methylation in the population carrying it
 #   genetic: other              another differentiated variant (divergent allele)
-#   no genetic signal           none of the above
+#   untested                    no differentiated variant, but < 50% of the
+#                               region's CpGs had enough genotype reads for a SNP
+#                               to be seen (see 13.7 cpg_testability.tsv)
+#   no genetic signal           none of the above, at a testable depth
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
@@ -51,7 +54,7 @@ pop_of = {r["sample"]: r["population"] for r in csv.DictReader(open(sheet), deli
 pops = list(dict.fromkeys(pop_of.values()))
 rows = list(csv.DictReader(open(table), delimiter="\t"))
 cols = list(rows[0]) + ["n_variant_sites", "n_pop_differentiated", "n_cpg_destroying_differentiated",
-                        "mapq_lt10_frac", "class"] + \
+                        "mapq_lt10_frac", "n_cpgs", "frac_cpgs_testable", "class"] + \
        [f"cpg_meth_{p}" for p in pops] + [f"CtoT_snp_cpgs_{p}" for p in pops] + [f"depth_{p}" for p in pops]
 print("\t".join(cols))
 for r in rows:
@@ -69,10 +72,14 @@ for r in rows:
     mq = list(csv.DictReader(open(f"{wd}/mapq.tsv"), delimiter="\t"))
     reads = sum(int(m["reads"]) for m in mq)
     low = f"{sum(int(m['mapq_lt10']) for m in mq) / reads:.2f}" if reads else ""
+    tst = list(csv.DictReader(open(f"{wd}/cpg_testability.tsv"), delimiter="\t"))
+    frac = sum(t["testable"] == "True" for t in tst) / len(tst) if tst else 0.0
     cls = ("repeat-like" if low and float(low) >= 0.5 else
            "genetic: CpG-destroying" if ctot else
-           "genetic: other" if diff else "no genetic signal")
-    out = [r[c] for c in rows[0]] + [str(len(var)), str(len(diff)), str(len(ctot)), low, cls]
+           "genetic: other" if diff else
+           "untested" if frac < 0.5 else "no genetic signal")
+    out = [r[c] for c in rows[0]] + [str(len(var)), str(len(diff)), str(len(ctot)), low,
+                                    str(len(tst)), f"{frac:.2f}", cls]
     def agg(pop, key, how):
         vals = [float(x[key]) for x in cpg if x["population"] == pop and x[key] not in ("", None)]
         if not vals: return ""
