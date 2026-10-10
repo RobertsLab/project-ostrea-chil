@@ -5,6 +5,8 @@ output:
     toc: true
     toc_float: true
 date: "2026-10-08"
+params:
+  ref: "merged"   # or "hapa": the WGBS_REF=hapa alignment, with 13.11 lifted genes
 ---
 
 Population differences in CpG methylation in *Ostrea chilensis*, from whole-genome
@@ -22,7 +24,12 @@ re-delivered; the contrasts below are built from whichever populations remain.
 files `output/13-wgbs/methylation/*.CpG_report.merged_CpG_evidence.cov.gz`.
 
 **Reference:** `merged_out.fasta` + `GN.gene.gff3`, the same as the current RNA-seq
-pipeline (`09`), so differentially methylated genes and DE genes share IDs.
+pipeline (`09`), so differentially methylated genes and DE genes share IDs. Render with
+`params = list(ref = "hapa")` to run on the `WGBS_REF=hapa` alignment to
+`Och_HapA_assembly.fa` instead: it reads `output/13-wgbs-hapa/` (methylation calls,
+alignment summary, the HapA `13.7` SNP mask), annotates with the GN genes lifted onto
+HapA by `13.11` (same gene IDs), and writes `output/13-wgbs-hapa/13.4-methylation`.
+DMR/DML coordinates are then on HapA, not the merged reference.
 
 **Where to run:** on a compute node inside the lab R container, e.g.
 
@@ -56,14 +63,22 @@ library(tidyverse)
 ```
 
 ```{r parameters}
-out_dir   <- "../output/13-wgbs/13.4-methylation"
-meth_dir  <- "../output/13-wgbs/methylation"
-genome_dir <- "../data/13-wgbs-genome"
+ref <- match.arg(params$ref, c("merged", "hapa"))
+ref_cfg <- list(
+  merged = list(out_root = "../output/13-wgbs", genome_dir = "../data/13-wgbs-genome",
+                gff = "GN.gene.gff3", assembly = "Och_merged_out"),
+  hapa   = list(out_root = "../output/13-wgbs-hapa", genome_dir = "../data/13-wgbs-genome-hapa",
+                gff = "GN.gene.hapa.gff3", assembly = "Och_HapA")   # gff from 13.11
+)[[ref]]
+out_root  <- ref_cfg$out_root
+out_dir   <- file.path(out_root, "13.4-methylation")
+meth_dir  <- file.path(out_root, "methylation")
+genome_dir <- ref_cfg$genome_dir
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 min_cov        <- 5      # per-CpG minimum (strand-merged); 10 is typical but costs most sites here
 max_cov_pctl   <- 99.9   # drop PCR/repeat pile-ups
-snp_mask       <- "../output/13-wgbs/13.7-snps/wgbs_snps.q20.CpG.bed"   # from 13.7; skipped if absent
+snp_mask       <- file.path(out_root, "13.7-snps/wgbs_snps.q20.CpG.bed")   # from 13.7; skipped if absent
 min_pop_n      <- 3L     # populations with fewer oysters are not tested
 min_per_group  <- 3L     # CpG must pass in >= 3 oysters (of 4) in every population
 tile_size      <- 1000   # bp, non-overlapping windows for DMRs
@@ -105,7 +120,7 @@ methylation is near zero, so CHH % ≈ 100 − conversion efficiency. Flag any s
 above ~1%.
 
 ```{r align-qc}
-aln <- read_tsv("../output/13-wgbs/alignment_summary.tsv", show_col_types = FALSE) %>%
+aln <- read_tsv(file.path(out_root, "alignment_summary.tsv"), show_col_types = FALSE) %>%
   inner_join(select(samples_all, sample, population), by = "sample")   # clean samples only
 aln
 
@@ -127,7 +142,7 @@ meth_raw <- methRead(
   location  = as.list(samples$file),
   sample.id = as.list(samples$sample),
   treatment = samples$treatment,
-  assembly  = "Och_merged_out",
+  assembly  = ref_cfg$assembly,
   pipeline  = "bismarkCoverage",
   context   = "CpG",
   mincov    = 1
@@ -246,7 +261,7 @@ seqlens <- read_tsv(file.path(genome_dir, "genome.chrom.sizes"),
                     col_names = c("chr", "len"), show_col_types = FALSE)
 si <- Seqinfo(seqlens$chr, seqlens$len)
 
-gff   <- import(file.path(genome_dir, "GN.gene.gff3"))
+gff   <- import(file.path(genome_dir, ref_cfg$gff))
 seqlevels(gff, pruning.mode = "coarse") <- seqlevels(si)   # align to FASTA order
 seqinfo(gff) <- si                                            # lengths needed for trim()/gaps()
 
