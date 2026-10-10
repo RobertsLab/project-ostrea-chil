@@ -386,7 +386,7 @@ gbm_oe %>%
             rho_exon = cor(gbm_pct, oe_exon, method = "spearman"))
 
 ggplot(filter(gbm_oe, oe_exon < 2), aes(oe_exon, gbm_pct)) +
-  geom_hex(bins = 60) +
+  geom_bin2d(bins = 60) +
   geom_smooth(colour = "red", se = FALSE) +
   facet_wrap(~species, labeller = as_labeller(sp_labels)) +
   scale_fill_viridis_c(trans = "log10") +
@@ -438,7 +438,7 @@ orth_oe <- orth %>% filter(.data[[x_oe]] < 2, .data[[y_oe]] < 2)
 rho_oe <- cor(orth_oe[[x_oe]], orth_oe[[y_oe]], method = "spearman")
 
 ggplot(orth_oe, aes(.data[[x_oe]], .data[[y_oe]])) +
-  geom_hex(bins = 60) + geom_abline(linetype = 2) +
+  geom_bin2d(bins = 60) + geom_abline(linetype = 2) +
   scale_fill_viridis_c(trans = "log10") +
   labs(x = paste("Exon CpG o/e,", sp_labels[1]), y = paste("Exon CpG o/e,", sp_labels[2]),
        subtitle = sprintf("%d orthologs, Spearman rho = %.2f", nrow(orth_oe), rho_oe)) +
@@ -456,7 +456,7 @@ orth_m <- orth %>% filter(!is.na(.data[[x_m]]), !is.na(.data[[y_m]]))
 rho_m <- cor(orth_m[[x_m]], orth_m[[y_m]], method = "spearman")
 
 ggplot(orth_m, aes(.data[[x_m]], .data[[y_m]])) +
-  geom_hex(bins = 50) + geom_abline(linetype = 2) +
+  geom_bin2d(bins = 50) + geom_abline(linetype = 2) +
   scale_fill_viridis_c(trans = "log10") +
   labs(x = paste("gbM (%),", sp_labels[1]), y = paste("gbM (%),", sp_labels[2]),
        subtitle = sprintf("%d orthologs, Spearman rho = %.2f", nrow(orth_m), rho_m)) +
