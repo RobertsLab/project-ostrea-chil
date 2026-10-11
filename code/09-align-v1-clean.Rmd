@@ -13,11 +13,20 @@ threads=36
 
 # Set paths
 ref_genome="../data/merged_out.fasta"
-input_dir="../output/00-qc/trimmed/porechop"
+input_dir="../output/00-qc/trimmed"
 output_dir="../output/09-align-v1-clean"
 
-# Loop over each FASTQ file
-for fq in ${input_dir}/*.fastq; do
+# Only use the Porechop outputs from 00-qc, not the intermediate trimmed reads.
+shopt -s nullglob
+fastqs=("${input_dir}"/*_porechop.fastq)
+if (( ${#fastqs[@]} == 0 )); then
+  echo "ERROR: no Porechop FASTQs in ${input_dir}; run 00-qc first." >&2
+  exit 1
+fi
+mkdir -p "${output_dir}"
+
+# Loop over each cleaned FASTQ file
+for fq in "${fastqs[@]}"; do
   # Extract sample name (e.g., Pum_barcode02 from Pum_barcode02_combined.fastq.gz)
   sample=$(basename "$fq" .fastq)
 
@@ -256,8 +265,9 @@ head ../output/09-align-v1-clean/stringtie_out/merged.gtf
 ```{r}
 library(rtracklayer)
 library(dplyr)
-# 1) Normalize your IDs: keep just "MSTRG.<number>"
-core_ids <- unique(sub('^(MSTRG\\.[0-9]+).*', '\\1', rownames(sig_degs)))
+# 1) Use the explicit gene IDs; combined contrasts can alter row names.
+# Keep just "MSTRG.<number>" for assembled genes and preserve reference IDs.
+core_ids <- unique(sub('^(MSTRG\\.[0-9]+).*', '\\1', sig_degs$gene_id))
 
 # 2) Import GTF
 gtf <- import("../output/09-align-v1-clean/stringtie_out/merged.gtf")  # your path
@@ -268,6 +278,5 @@ keep <- gtf[mcols(gtf)$gene_id %in% core_ids]
 # 4) Export subset
 export(keep, "../output/09-align-v1-clean/stringtie_out/subset.gtf")
 ```
-
 
 

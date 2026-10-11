@@ -250,6 +250,9 @@ for name, r in regions.items():
         if t1 is None or t2 is None:
             lifted[name] = dict(h, qcov=qcov, ident=ident, ok=False, why="CpG in an indel")
             continue
+        if abs(t1 - t2) != 1:
+            lifted[name] = dict(h, qcov=qcov, ident=ident, ok=False, why="CpG bases are not adjacent")
+            continue
         tc = min(t1, t2)                   # 0-based C of the CpG on HapA's + strand
         cg = hapa[h["t"]][tc:tc + 2]
         lifted[name] = dict(h, qcov=qcov, ident=ident, ok=True, tstart=tc + 1, tend=tc + 2, cg=cg)
