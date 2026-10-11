@@ -152,7 +152,10 @@ for off, rb in enumerate(ref):
         "n_oysters_with_alt": sum(1 for n, f in freqs.values() if f and n >= a.min_depth and f >= a.min_alt),
         **{f"alt_freq_{pop}": "" if means[pop] is None else round(means[pop], 3) for pop in pops},
         "pop_differentiated": differentiated(counts, freqs, alt),
-        "cpg_destroying": (rb, alt) in (("C", "T"), ("G", "A")),
+        "cpg_destroying": (
+            (rb == "C" and alt == "T" and ref[off:off + 2] == "CG")
+            or (rb == "G" and alt == "A" and off > 0 and ref[off - 1:off + 1] == "CG")
+        ),
         **{s: "" if f is None else f"{f:.2f}/{n}" for s, (n, f) in freqs.items()},
     })
 
